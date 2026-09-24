@@ -238,6 +238,10 @@ sessions under `~/.bb/pi-bridge-sessions/`. It also honors `PI_CODING_AGENT_DIR`
 set in backpass's environment. When roots overlap, backpass scans every applicable layout
 and reads each JSONL file once.
 
+OMP nests subagent JSONL files below each parent session. Backpass analyzes each file
+separately, but uses the parent session as their shared corroboration source; a parent and
+its subagents cannot count as independent sessions.
+
 OpenCode collection reads both store layouts: OpenCode 1.x (`session`, `message`, `part`) and OpenCode 2.x (`session_v2`, `session_message`).
 For 2.x, session activity uses the later of the session's update time and its newest message's update time.
 An upgraded store keeps its 1.x tables beside the copies in `session_v2`, so a session found in both is read from `session_v2`.
@@ -289,12 +293,12 @@ OpenCode sessions with no recorded messages, such as unused agent probes, are no
 
 Every remaining session is labelled **interactive** or **non-interactive** (`src/interaction.js`).
 Codex `codex exec` / `originator: codex_exec`, Claude SDK, GitHub, action, and CI
-entrypoints, OpenCode child sessions (`parent_id`), and a cwd with a `.no-mistakes` path
-segment are non-interactive. Hermes gateway, cron, and WhatsApp sessions are classified the
-same way if they leak past collection's source filter. A no-mistakes pipeline run is just one
-kind of non-interactive session, not its own category. Missing harness metadata defaults to
-interactive. `backpass scan`, the proposal, and apply all print the mix so relevance is never
-silently computed against a robot-skewed pool.
+entrypoints, OpenCode child sessions (`parent_id`), OMP subagent transcripts, and a cwd
+with a `.no-mistakes` path segment are non-interactive. Hermes gateway, cron, and WhatsApp
+sessions are classified the same way if they leak past collection's source filter. A
+no-mistakes pipeline run is just one kind of non-interactive session, not its own category.
+Missing harness metadata defaults to interactive. `backpass scan`, the proposal, and apply
+all print the mix so relevance is never silently computed against a robot-skewed pool.
 
 ```sh
 backpass scan --since 7d --strict
