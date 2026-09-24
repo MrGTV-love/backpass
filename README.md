@@ -232,15 +232,17 @@ relocated config dir does not hide its sessions. The variable is read from backp
 environment: if you reach that profile through an alias that only prefixes `claude`, set it
 for the backpass run too (`CLAUDE_CONFIG_DIR=~/.claude-work backpass`, or export it).
 
-Pi collection covers standalone sessions under `~/.pi/agent/sessions/` and BB-managed Pi
-sessions under `~/.bb/pi-bridge-sessions/`. It also honors `PI_CODING_AGENT_DIR`,
+Pi collection covers standalone sessions under `~/.pi/agent/sessions/`, OMP sessions under
+`~/.omp/agent/sessions/`, and BB-managed Pi sessions under `~/.bb/pi-bridge-sessions/`. It
+also honors `PI_CODING_AGENT_DIR`,
 `PI_CODING_AGENT_SESSION_DIR`, `BB_DATA_DIR`, and `BB_PI_BRIDGE_SESSION_DIR` when they are
 set in backpass's environment. When roots overlap, backpass scans every applicable layout
 and reads each JSONL file once.
 
-OMP nests subagent JSONL files below each parent session. Backpass analyzes each file
-separately, but uses the parent session as their shared corroboration source; a parent and
-its subagents cannot count as independent sessions.
+OMP nests subagent JSONL files below each parent session, and a subagent's own subagents
+one level further down. Backpass analyzes each file separately, but uses the root session as
+their shared corroboration source; a session and its subagents cannot count as independent
+sessions.
 
 OpenCode collection reads both store layouts: OpenCode 1.x (`session`, `message`, `part`) and OpenCode 2.x (`session_v2`, `session_message`).
 For 2.x, session activity uses the later of the session's update time and its newest message's update time.
