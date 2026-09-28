@@ -48,7 +48,15 @@ export function effortOptionKey(agent) {
 export class AcpxError extends Error {
   constructor(
     message,
-    { stdout = "", stderr = "", code = null, timedOut = false, spawnError = null, emptyOutput = false } = {},
+    {
+      stdout = "",
+      stderr = "",
+      code = null,
+      timedOut = false,
+      spawnError = null,
+      emptyOutput = false,
+      stage = null,
+    } = {},
   ) {
     super(message);
     this.name = "AcpxError";
@@ -61,6 +69,8 @@ export class AcpxError extends Error {
     this.unsupported = false;
     /** Set when the call exited clean but produced no usable text - see `assertNonEmptyOutput`. */
     this.emptyOutput = emptyOutput;
+    /** "verify" when the adapter-configuration check timed out, before any prompt ran. */
+    this.stage = stage;
   }
 }
 
@@ -342,10 +352,24 @@ function invocationAgentArgs(invocation, agent) {
   return invocation.acpxAgentCommand ? ["--agent", invocation.acpxAgentCommand] : [acpxAgentName(agent)];
 }
 
-async function verifyHarnessInvocation(invocation, cwd) {
+/** Budget for one `acpx config show`; the single retry after a timeout gets three times this. */
+const VERIFY_CONFIG_TIMEOUT_MS = 10_000;
+
+async function verifyHarnessInvocation(invocation, cwd, { timeoutMs = VERIFY_CONFIG_TIMEOUT_MS } = {}) {
   if (!invocation.requiredBuiltinAgent) return;
   const args = [...(cwd ? ["--cwd", cwd] : []), "config", "show", "--format", "json"];
-  const result = await run(args, { timeoutMs: 10_000, cwd, env: invocation.env });
+  let result = await run(args, { timeoutMs, cwd, env: invocation.env });
+  // A timed-out `config show` says nothing about the adapter map: on a loaded host node can
+  // take longer than the budget just to start. Retry once with a wider budget; if it still
+  // times out, fail this call (the analysis stage records it and a later run retries it)
+  // rather than raise a UserError, which stops the whole run with advice that cannot help.
+  if (result.timedOut) result = await run(args, { timeoutMs: timeoutMs * 3, cwd, env: invocation.env });
+  if (result.timedOut) {
+    throw new AcpxError(
+      `acpx config show timed out verifying the ${invocation.requiredBuiltinAgent} adapter configuration`,
+      { ...result, stage: "verify" },
+    );
+  }
   if (result.code !== 0) {
     throw new UserError(
       `cannot verify acpx adapter configuration for ${invocation.requiredBuiltinAgent}: ${firstLine(result.stderr) || `exit ${result.code}`}`,
@@ -465,6 +489,7 @@ export async function execOneShot({
   promptRetries = 1,
   approveReads = true,
   suppressReads = true,
+  verifyTimeoutMs = VERIFY_CONFIG_TIMEOUT_MS,
 }) {
   const invocation = prepareHarnessInvocation({ agent, model, effort });
   const args = [
@@ -479,7 +504,7 @@ export async function execOneShot({
 
   const startedAt = Date.now();
   try {
-    await verifyHarnessInvocation(invocation, cwd);
+    await verifyHarnessInvocation(invocation, cwd, { timeoutMs: verifyTimeoutMs });
     if (effort && invocation.setEffortKey) {
       throw new UserError(
         `${agent} cannot apply invocation-scoped effort=${effort} in an exec one-shot`,
@@ -552,6 +577,7 @@ export async function openSession({
   cwd,
   writeAccess = false,
   createTimeoutMs = SESSION_CREATE_TIMEOUT_MS,
+  verifyTimeoutMs = VERIFY_CONFIG_TIMEOUT_MS,
 }) {
   const invocation = prepareHarnessInvocation({ agent, model, effort, writeAccess });
   const notes = [...invocation.notes];
@@ -562,7 +588,7 @@ export async function openSession({
   /** @type {Awaited<ReturnType<typeof run>>} */
   let created;
   try {
-    await verifyHarnessInvocation(invocation, cwd);
+    await verifyHarnessInvocation(invocation, cwd, { timeoutMs: verifyTimeoutMs });
     created = await run(
       [
         ...(invocation.acpxModel ? ["--model", invocation.acpxModel] : []),

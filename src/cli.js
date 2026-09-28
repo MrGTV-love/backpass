@@ -11,6 +11,7 @@ import { applyNestedMemoryConfig } from "./nested.js";
 import { printTargetNote, resolveTarget, TARGET_COMMANDS } from "./target.js";
 import { State } from "./state.js";
 import { AgentResolver } from "./agents.js";
+import { AcpxError } from "./acpx.js";
 
 import { cmdInit } from "./commands/init.js";
 import { cmdScan } from "./commands/scan.js";
@@ -316,12 +317,26 @@ export async function main(argv) {
 
     return (await command(ctx)) ?? 0;
   } catch (err) {
-    if (err instanceof UserError) {
-      fail(err.message);
-      if (err.hint) console.error(`  ${err.hint}`);
-      return 1;
-    }
-    fail(err.stack || err.message);
+    return reportError(err);
+  }
+}
+
+/** Print a failure that escaped a command and return the exit code. */
+export function reportError(err) {
+  if (err instanceof UserError) {
+    fail(err.message);
+    if (err.hint) console.error(`  ${err.hint}`);
     return 1;
   }
+  if (err instanceof AcpxError && err.timedOut) {
+    fail(err.message);
+    console.error(
+      err.stage === "verify"
+        ? "  acpx was too slow to start (adapter-configuration check timed out twice); rerun when the host is less loaded - finished analysis is cached"
+        : "  the harness call timed out; rerun to retry - finished analysis is cached - or raise timeoutSeconds in the backpass config",
+    );
+    return 1;
+  }
+  fail(err.stack || err.message);
+  return 1;
 }

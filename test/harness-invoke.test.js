@@ -108,6 +108,21 @@ fs.appendFileSync(process.env.FAKE_ACPX_LOG, JSON.stringify({
   CODEX_PATH: process.env.CODEX_PATH || null,
 }) + "\\n");
 const settings = process.env.FAKE_HARNESS_SETTINGS;
+// FAKE_CONFIG_SHOW_HANG: "always" hangs every config show until killed; "once" hangs only
+// the first one (the marker file records it), modelling a loaded host where node is slow
+// to start.
+const hang = process.env.FAKE_CONFIG_SHOW_HANG;
+const hangMarker = process.env.FAKE_CONFIG_SHOW_HANG_MARKER;
+const hangNow =
+  argv.includes("config") &&
+  argv.includes("show") &&
+  (hang === "always" || (hang === "once" && hangMarker && !fs.existsSync(hangMarker)));
+if (hangNow) {
+  if (hangMarker) fs.writeFileSync(hangMarker, "1");
+  // Block synchronously so nothing below runs; the caller's timeout kill ends the process.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
+  process.exit(0);
+}
 if (argv.includes("config") && argv.includes("show")) {
   const replacement = process.env.FAKE_REPLACEMENT_AGENT;
   const agents = replacement ? { [replacement]: { argv: ["custom-adapter"] } } : {};
@@ -679,6 +694,64 @@ test("configured replacement adapters are rejected for positional built-ins", as
     assert.equal(settingsBytes().compare(before), 0);
     assert.ok(!acpxCalls().some((c) => c.argv.includes("new") || c.argv.includes("exec")));
   }
+});
+
+test("a timed-out adapter-configuration check fails the call, not the run", async () => {
+  resetLogsAndSettings();
+  process.env.FAKE_CONFIG_SHOW_HANG = "always";
+  try {
+    // An AcpxError is a per-call failure the analysis stage records and retries; a
+    // UserError would stop the whole run with "upgrade acpx" advice that cannot help.
+    await assert.rejects(
+      () =>
+        openSession({
+          agent: "codex",
+          model: "gpt-5.6-sol",
+          effort: "high",
+          sessionName: "bp-codex-verify-hang",
+          cwd: workDir,
+          verifyTimeoutMs: 2_000,
+        }),
+      {
+        name: "AcpxError",
+        timedOut: true,
+        stage: "verify",
+        message: /timed out verifying the codex adapter configuration/,
+      },
+    );
+  } finally {
+    delete process.env.FAKE_CONFIG_SHOW_HANG;
+  }
+  const calls = acpxCalls();
+  assert.equal(calls.filter((c) => c.argv.includes("config") && c.argv.includes("show")).length, 2);
+  assert.ok(!calls.some((c) => c.argv.includes("new") || c.argv.includes("exec")));
+});
+
+test("a slow first adapter-configuration check is retried before the session opens", async () => {
+  resetLogsAndSettings();
+  const marker = path.join(binDir, "config-show-hang-once");
+  fs.rmSync(marker, { force: true });
+  process.env.FAKE_CONFIG_SHOW_HANG = "once";
+  process.env.FAKE_CONFIG_SHOW_HANG_MARKER = marker;
+  try {
+    const session = await openSession({
+      agent: "codex",
+      model: "gpt-5.6-sol",
+      effort: "high",
+      sessionName: "bp-codex-verify-retry",
+      cwd: workDir,
+      verifyTimeoutMs: 2_000,
+    });
+    await session.close();
+  } finally {
+    delete process.env.FAKE_CONFIG_SHOW_HANG;
+    delete process.env.FAKE_CONFIG_SHOW_HANG_MARKER;
+    fs.rmSync(marker, { force: true });
+  }
+  const calls = acpxCalls();
+  assert.equal(calls.filter((c) => c.argv.includes("config") && c.argv.includes("show")).length, 2);
+  assert.ok(calls.some((c) => c.argv.includes("new")));
+  assert.deepEqual(setCalls(calls).map(setKey), ["reasoning_effort"]);
 });
 
 test("Grok session forces an acpx raw-command override with process model and effort", async () => {
