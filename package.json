@@ -43,7 +43,7 @@
     "lint": "eslint bin src test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --import ./test/helpers/hermetic-config.js --test \"test/**/*.test.js\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {},
