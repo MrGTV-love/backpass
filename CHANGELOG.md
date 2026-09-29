@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.30](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.29...backpass-v0.1.30) (2026-09-28)
+
+
+### Bug Fixes
+
+* **acpx:** retry timed-out adapter verification instead of aborting the run ([#168](https://github.com/kunchenguid/backpass/issues/168)) ([fd29d96](https://github.com/kunchenguid/backpass/commit/fd29d96ab8fb3aa1decb2c664fd4d32b8d7a90b1))
+
 ## [0.1.29](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.28...backpass-v0.1.29) (2026-09-28)
 
 
