@@ -62,6 +62,7 @@ const OPTIONS = {
 
   "dry-run": { type: "boolean" },
   "no-ui": { type: "boolean" },
+  decisions: { type: "string", multiple: true },
   "no-open": { type: "boolean" },
   "no-auto-agent": { type: "boolean" },
   force: { type: "boolean" },
@@ -132,6 +133,10 @@ BUDGET AND SHAPE
 
 APPLY
   --no-ui                  terminal accept/reject instead of the Lavish surface
+  --decisions <vector>     decide without a review surface, e.g. for a script you
+                           trust: "e1=accepted e2=rejected:too-narrow"; an edit
+                           it does not name is left undecided. Repeatable; all vectors
+                           are checked together, and no edit may be decided twice
   --no-open                print the review surface URL without opening a browser
   --dry-run                show what would be written, write nothing
   --force                  re-analyze transcripts that already have fresh evidence,
@@ -275,6 +280,9 @@ export async function main(argv) {
     config.discovery.hosts = applyHostFlag(config.discovery.hosts, values.host);
     const scope = resolveScope(process.cwd(), { ...values, scope: kind, strict: Boolean(values.strict) }, config, repo);
     printScopeNote(scope);
+    if (values.decisions !== undefined && commandName !== "apply") {
+      throw new UserError(`--decisions does not apply to ${commandName}`, "it decides the edits of `backpass apply`");
+    }
     if (values.target !== undefined && !TARGET_COMMANDS.has(commandName)) {
       throw new UserError(
         `--target does not apply to ${commandName}`,

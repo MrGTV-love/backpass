@@ -236,7 +236,8 @@ function removeEmptyDirectories(directories) {
  * The only place in backpass that writes to the repo.
  *
  * Everything upstream is read-only analysis; a run only changes the weights here, after
- * a human accepted specific edits. Before the first byte is written, the memory file and
+ * explicit per-edit decisions arrive through `cmdApply` (see `../commands/apply.js`).
+ * Before the first byte is written, the memory file and
  * every decided non-memory target must still be the files the proposal measured; the
  * accepted subset must clear the same cap/shrink budget gate as the full proposal
  * (`budgetGateKind`); every accepted edit for a file must compose against that file's

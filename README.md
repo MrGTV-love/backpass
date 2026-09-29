@@ -38,8 +38,8 @@ memory file and project skills - under a token budget, gated by you.
 - **Evidence-gated** - Every proposed edit carries verbatim quotes from real sessions,
   and every `add`, `rewrite`, or `remove` edit needs evidence from at least two distinct
   sessions. Small, noisy, bounded steps - not a rewrite.
-- **Human in the loop** - Analysis never writes. `backpass apply` is the only writing
-  command, and it shows each edit with its evidence for you to accept or reject.
+- **Human in the loop** - Analysis never writes.
+  See [Apply - the human gate](#8-apply---the-human-gate) for review and explicit scripted decisions.
 
 ```
 AGENTS.md / CLAUDE.md + skills (the weights)
@@ -536,10 +536,9 @@ changed since the proposal measured it, exactly as it refuses a drifted memory f
 
 ### 8. Apply - the human gate
 
-`backpass apply` is the only command that writes. It serves a review surface through
-[`lavish-axi`](https://github.com/kunchenguid/lavish-axi): one card per edit with the diff,
-the evidence quotes and their sources, a live budget gauge, and ACCEPT / REJECT. Above them
-one funnel band runs from every finding the analysis recorded down to the edits proposed.
+`backpass apply` is the only command that writes.
+By default it serves a review surface through [`lavish-axi`](https://github.com/kunchenguid/lavish-axi): one card per edit with the diff, the evidence quotes and their sources, a live budget gauge, and ACCEPT / REJECT.
+Above them one funnel band runs from every finding the analysis recorded down to the edits proposed.
 Blue and amber lanes distinguish existing-instruction work from missing-instruction work;
 the final row counts edits by their measured shape, while the earlier rows count findings
 or candidates. Each drop between two rows is named in plain words. Older proposals without
@@ -557,6 +556,13 @@ until a later run has strictly more sessions behind it. Extract and move still m
 hunk bytes. The browser surface can attach an optional reason (`wrong-evidence`,
 `already-covered`, `too-narrow`, `too-broad`, `disagree`); `--no-ui` records the rejection
 without asking for one.
+
+A review made somewhere else can arrive as `--decisions`, the vector the surface sends:
+`backpass apply --decisions "e1=accepted e2=rejected:too-narrow"`.
+It is for someone who chose to let a script they trust decide for their own repo, so it is never a default and it is strict: every token names one edit of the proposal and an `accepted` or `rejected` verdict, with at most one of the reasons above allowed only on `rejected`, or nothing is written.
+It cannot be combined with `--no-ui`.
+The flag is repeatable: all supplied vectors are checked together as one vector, each must name at least one edit, and naming an edit twice is refused, even across flags.
+Edits it does not name stay untouched, and every gate below still applies.
 
 The live budget gauge is not just a readout. Apply rechecks the accepted subset against
 the same budget gate as synthesis: stay under the cap, or shrink if the file is already
@@ -588,6 +594,7 @@ the repository may have changed.
 backpass apply --no-ui     # same decision, in the terminal
 backpass apply --no-open   # print the surface URL, don't launch a browser
 backpass apply --dry-run   # show what would be written
+backpass apply --decisions "e1=accepted e2=rejected:disagree"   # decided elsewhere
 ```
 
 ### 9. Which file is the weights
