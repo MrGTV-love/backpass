@@ -413,7 +413,8 @@ function toTranscript(adapter, row, association, id, { host = null, remote = nul
  * `rawPath` names a real local file - which is what keeps the analysis prompt's
  * raw-transcript escape hatch working for a session that ran on another machine. A
  * SQLite store has no per-session file to copy, so the probe ran `read()` over there and
- * the cache holds its events, exactly the situation a local SQLite session is already in.
+ * the cache holds its events. Local SQLite sessions still return the store as `rawPath`;
+ * `src/analyze.js` owns the session-specific export used by the analysis prompt.
  */
 export async function readTranscript(transcript) {
   const adapter = getAdapter(transcript.harness);

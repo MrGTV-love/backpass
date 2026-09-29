@@ -26,6 +26,7 @@ export const STATE_EXCLUDE_LINE = `${STATE_DIRNAME}/`;
  *   gap-ledger.json        gap observations by gap and session, accumulated across runs (src/gap-ledger.js)
  *   agent-probe-cache.json TTL'd availability/auth verdicts per agent|model (src/agents.js)
  *   prompts/               the exact prompts of the last run, one file per model turn
+ *   raw/                   a SQLite-store session's events while its analysis call runs (src/analyze.js)
  *   synthesis/             the staging copy the synthesis agent edits natively (src/workspace.js)
  *   apply/                 the rendered Lavish apply surface
  */

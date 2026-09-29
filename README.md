@@ -288,8 +288,12 @@ deterministically: user and assistant turns verbatim, each tool call collapsed t
 (`tool: Bash "npm test" -> 1 failing`), tool output truncated, injected harness scaffolding
 dropped, secrets redacted. Typical reduction is **96-99%**.
 
-The distilled trace ends with the path to the raw transcript, so the analysis agent can
-open the original when - and only when - a specific claim needs it.
+The distilled trace ends with the path to the raw transcript, so the analysis agent can open the original when - and only when - a specific claim needs it.
+For a session in a local SQLite store (opencode, hermes, Cursor CLI, Cursor IDE), the analysis call names a file of that session's normalized events instead of the store, which may contain other sessions or require queries against an undocumented schema.
+The file is written with mode `0600` under `raw/` in the active [state directory](#state), only for non-trivial sessions, and removed when the call finishes or during catchable process exits, including SIGINT or SIGTERM.
+While the call runs, backpass renews the file's modification time every minute; reclamation waits for 24 hours without renewal to tolerate hours of clock skew between hosts sharing a state directory.
+Files left by an uncatchable exit such as SIGKILL become eligible for cleanup after a day, and the next analysis run removes them from the root and nested state directories; PIDs play no part, since they cannot establish ownership or liveness across hosts or PID namespaces.
+Reclamation is best-effort: an unreadable, vanished during scanning, or non-directory `nested/` or `raw/` entry is skipped with one warning, without aborting analysis.
 
 ### 3. Calculate loss - one cheap call per transcript
 
@@ -861,6 +865,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
   rejections.json        edits you turned down, and the evidence behind them
   gap-ledger.json        gap sightings by gap and session, accumulated across runs
   hosts/                 transcripts fetched from SSH hosts (mode 0700), pruned after 30 days unused
+  raw/                   temporary session events (see Distill)
   apply/apply.html       the rendered review surface
 ```
 
