@@ -17,8 +17,10 @@ import { SELF_SESSION_SENTINEL } from "../sentinel.js";
  *
  * The check reads only the head of the file and keys on the JSON-encoded user text as
  * every file-backed harness records it (`"text":"..."` / `"content":"..."` /
- * `"message":"..."`). SQLite-backed stores (opencode, hermes, cursor IDE) have no file to
- * inspect and acpx does not drive them, so they are passed through.
+ * `"message":"..."`). A SQLite-backed store has no per-session file, and its database is
+ * never read as one: its pages hold every session's text, so one self session near the
+ * start would mark the whole store. Store-backed detection belongs to the adapter;
+ * see `./adapters/opencode.js` for its `self` marker and ancestry handling.
  */
 
 const HEAD_BYTES = 256 * 1024;
@@ -56,12 +58,13 @@ function isUnder(child, parent) {
 
 /**
  * @param {{ path?: string | null, cwd?: string | null }} transcript
- * @param {{ stateDir?: string | null }} [options]
+ * @param {{ stateDir?: string | null, readHead?: boolean }} [options]
+ *   Set `readHead: false` for SQLite stores; see the module's file-head safety invariant.
  * @returns {boolean}
  */
-export function isSelfSession(transcript, { stateDir } = {}) {
+export function isSelfSession(transcript, { stateDir, readHead = true } = {}) {
   if (stateDir && isUnder(transcript?.cwd, stateDir)) return true;
-  const file = transcript?.path;
+  const file = readHead ? transcript?.path : null;
   if (!file) return false;
   let fd;
   try {

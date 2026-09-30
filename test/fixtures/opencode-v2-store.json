@@ -1,0 +1,337 @@
+{
+  "comment": "OpenCode 2.x store (2.0.18): DDL copied from a real opencode.db, rows modeled field-for-field on real session_message rows with the text replaced.",
+  "schema": [
+    "CREATE TABLE `project` (\n          `id` text PRIMARY KEY,\n          `worktree` text NOT NULL,\n          `vcs` text,\n          `name` text,\n          `icon_url` text,\n          `icon_url_override` text,\n          `icon_color` text,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `time_initialized` integer,\n          `time_active` integer DEFAULT 0 NOT NULL,\n          `sandboxes` text NOT NULL,\n          `commands` text\n        )",
+    "CREATE TABLE `session_v2` (\n          `id` text PRIMARY KEY,\n          `project_id` text NOT NULL,\n          `workspace_id` text,\n          `parent_id` text,\n          `fork_session_id` text,\n          `fork_boundary` text,\n          `slug` text NOT NULL,\n          `directory` text NOT NULL,\n          `path` text,\n          `title` text,\n          `version` text NOT NULL,\n          `share_url` text,\n          `summary_additions` integer,\n          `summary_deletions` integer,\n          `summary_files` integer,\n          `summary_diffs` text,\n          `metadata` text,\n          `cost` real DEFAULT 0 NOT NULL,\n          `tokens_input` integer DEFAULT 0 NOT NULL,\n          `tokens_output` integer DEFAULT 0 NOT NULL,\n          `tokens_reasoning` integer DEFAULT 0 NOT NULL,\n          `tokens_cache_read` integer DEFAULT 0 NOT NULL,\n          `tokens_cache_write` integer DEFAULT 0 NOT NULL,\n          `revert` text,\n          `permission` text,\n          `agent` text,\n          `model` text,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `time_idle` integer,\n          `time_viewed` integer,\n          `idle_outcome` text,\n          `time_compacting` integer,\n          `time_archived` integer,\n          `time_suspended` integer,\n          `resume_attempts` integer DEFAULT 0 NOT NULL,\n          CONSTRAINT `fk_session_v2_project_id_project_id_fk` FOREIGN KEY (`project_id`) REFERENCES `project`(`id`) ON DELETE CASCADE\n        )",
+    "CREATE INDEX `session_v2_project_idx` ON `session_v2` (`project_id`)",
+    "CREATE INDEX `session_v2_workspace_idx` ON `session_v2` (`workspace_id`)",
+    "CREATE INDEX `session_v2_parent_idx` ON `session_v2` (`parent_id`)",
+    "CREATE TABLE `session_message` (\n          `id` text PRIMARY KEY,\n          `session_id` text NOT NULL,\n          `type` text NOT NULL,\n          `seq` integer NOT NULL,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `data` text NOT NULL,\n          CONSTRAINT `fk_session_message_session_id_session_v2_id_fk` FOREIGN KEY (`session_id`) REFERENCES `session_v2`(`id`) ON DELETE CASCADE\n        )",
+    "CREATE UNIQUE INDEX `session_message_session_seq_idx` ON `session_message` (`session_id`,`seq`)",
+    "CREATE INDEX `session_message_session_type_seq_idx` ON `session_message` (`session_id`,`type`,`seq`)",
+    "CREATE INDEX `session_message_session_time_created_id_idx` ON `session_message` (`session_id`,`time_created`,`id`)",
+    "CREATE INDEX `session_message_time_created_idx` ON `session_message` (`time_created`)"
+  ],
+  "rows": {
+    "project": [
+      {
+        "id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "worktree": "/repo/demo",
+        "vcs": "git",
+        "name": null,
+        "time_created": 1790600000000,
+        "time_updated": 1790600000000,
+        "time_active": 1790600000000,
+        "sandboxes": "[]"
+      }
+    ],
+    "session_v2": [
+      {
+        "id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "project_id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "parent_id": null,
+        "slug": "quiet-harbor",
+        "directory": "/repo/demo",
+        "title": "Parser fix",
+        "version": "2.0.18",
+        "agent": "build",
+        "model": "{\"id\":\"claude-opus-5.5\",\"providerID\":\"github-copilot\",\"variant\":\"max\"}",
+        "time_created": 1790600000000,
+        "time_updated": 1790600000005
+      },
+      {
+        "id": "ses_f17c42540ffeM0ZIydCm19byyr",
+        "project_id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "parent_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "slug": "brave-lantern",
+        "directory": "/repo/demo",
+        "title": "Review the parser fix",
+        "version": "2.0.18",
+        "agent": "general",
+        "model": "{\"id\":\"claude-opus-5.5\",\"providerID\":\"github-copilot\",\"variant\":\"max\"}",
+        "time_created": 1790600003000,
+        "time_updated": 1790600003006
+      },
+      {
+        "id": "ses_f139e87ceffeqUsW26A55Cc7W1",
+        "project_id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "parent_id": null,
+        "slug": "calm-meadow",
+        "directory": "/repo/demo",
+        "title": "OK",
+        "version": "2.0.18",
+        "time_created": 1790600100000,
+        "time_updated": 1790600100004
+      },
+      {
+        "id": "ses_f0a1b2c3dffeResumedSession01",
+        "project_id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "parent_id": null,
+        "slug": "old-river",
+        "directory": "/repo/demo",
+        "title": "Release checklist",
+        "version": "2.0.18",
+        "time_created": 1780000000000,
+        "time_updated": 1780000000006
+      },
+      {
+        "id": "ses_f1378472bffeProbeEmptySess1",
+        "project_id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "parent_id": null,
+        "slug": "still-pond",
+        "directory": "/repo/demo",
+        "title": "New session - 2026-09-29T09:38:32.788Z",
+        "version": "2.0.18",
+        "time_created": 1790600150000,
+        "time_updated": 1790600150002
+      },
+      {
+        "id": "ses_f139e880dffeSelfChildSess01",
+        "project_id": "4543ef05f941fa749aeee49424f45ba51263fe31",
+        "parent_id": "ses_f139e87ceffeqUsW26A55Cc7W1",
+        "slug": "quick-heron",
+        "directory": "/repo/demo",
+        "title": "Summarize the trace",
+        "version": "2.0.18",
+        "time_created": 1790600100200,
+        "time_updated": 1790600100206
+      }
+    ],
+    "session_message": [
+      {
+        "id": "msg_probe_instruction",
+        "session_id": "ses_f1378472bffeProbeEmptySess1",
+        "type": "synthetic",
+        "seq": 0,
+        "time_created": 1790600150001,
+        "time_updated": 1790600150001,
+        "data": { "metadata": { "instruction": { "paths": ["/repo/demo/AGENTS.md"] } }, "text": "Instructions from: /repo/demo/AGENTS.md" }
+      },
+      {
+        "id": "msg_probe_system",
+        "session_id": "ses_f1378472bffeProbeEmptySess1",
+        "type": "system",
+        "seq": 1,
+        "time_created": 1790600150002,
+        "time_updated": 1790600150002,
+        "data": { "metadata": { "notice": "instructions" }, "text": "Instructions updated" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000000",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "synthetic",
+        "seq": 0,
+        "time_created": 1790600000010,
+        "time_updated": 1790600000010,
+        "data": { "metadata": { "instruction": { "paths": ["/repo/demo/AGENTS.md"] } }, "time": { "created": 1790600000010 }, "text": "Instructions from: /repo/demo/AGENTS.md\n# Demo\n\n- Keep PRs small.", "description": "Loaded AGENTS.md" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000001",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "system",
+        "seq": 1,
+        "time_created": 1790600000011,
+        "time_updated": 1790600000011,
+        "data": { "metadata": { "notice": "instructions", "instructionSources": ["core/date"] }, "time": { "created": 1790600000011 }, "text": "Today's date is Tue Sep 29 2026.", "description": "Instructions updated: core/date" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000002",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "user",
+        "seq": 2,
+        "time_created": 1790600000012,
+        "time_updated": 1790600000012,
+        "data": { "metadata": { "displayText": "Open a PR for the parser fix.", "comments": [], "attachments": [], "agent": "build", "model": { "modelID": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" } }, "time": { "created": 1790600000012 }, "text": "Open a PR for the parser fix.", "files": [], "agents": [] }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000003",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "assistant",
+        "seq": 3,
+        "time_created": 1790600000100,
+        "time_updated": 1790600002900,
+        "data": { "time": { "created": 1790600000100, "streamed": 1790600001000, "completed": 1790600002900 }, "agent": "build", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" }, "content": [ { "type": "reasoning", "text": "internal reasoning about the parser", "state": { "reasoningOpaque": "OPAQUE" }, "time": { "created": 1790600000200, "completed": 1790600000300 } }, { "type": "text", "text": "I'll run the tests first.", "state": { "reasoningOpaque": "OPAQUE" } }, { "type": "tool", "id": "toolu_01JFEeX4BmwwZN4sZGKiCoNw", "name": "shell", "executed": false, "state": { "status": "completed", "input": { "command": "npm test", "workdir": "/repo/demo" }, "content": [ { "type": "text", "text": "2 passing" } ], "metadata": { "exit": 0, "truncated": false } }, "time": { "created": 1790600000400, "ran": 1790600000410, "completed": 1790600001400 } }, { "type": "tool", "id": "toolu_01V36JvUoKMVoah95Aeh6zT1", "name": "read", "executed": false, "state": { "status": "completed", "input": { "path": "/repo/demo/src/parser.ts" }, "content": [ { "type": "text", "text": "Read file /repo/demo/src/parser.ts, lines 1-1\n1: export function parse() {}" }, { "type": "file", "mime": "image/png", "uri": "data:image/png;base64,AAAA" } ], "metadata": { "truncated": false } }, "time": { "created": 1790600001500, "ran": 1790600001510, "completed": 1790600001600 } }, { "type": "tool", "id": "toolu_016aoVojXHjQBqHr77sZKwTw", "name": "subagent", "executed": false, "state": { "status": "completed", "input": { "agent": "general", "description": "Review the parser fix", "background": true, "prompt": "You are a subagent spawned by another session.\nReview src/parser.ts." }, "content": [ { "type": "text", "text": "The subagent is working in the background (sessionID: ses_f17c42540ffeM0ZIydCm19byyr). You will be notified automatically when it finishes." } ], "metadata": { "sessionID": "ses_f17c42540ffeM0ZIydCm19byyr", "status": "running", "truncated": false } }, "time": { "created": 1790600002800, "ran": 1790600002810, "completed": 1790600002900 } } ], "finish": "tool-calls", "rawFinish": "tool_use", "cost": 0, "tokens": { "input": 1200, "output": 80, "reasoning": 20, "cache": { "read": 0, "write": 0 } } }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000004",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "synthetic",
+        "seq": 4,
+        "time_created": 1790600009000,
+        "time_updated": 1790600009000,
+        "data": { "metadata": { "source": "subagent", "childID": "ses_f17c42540ffeM0ZIydCm19byyr", "agent": "General", "state": "completed" }, "time": { "created": 1790600009000 }, "text": "<subagent sessionID=\"ses_f17c42540ffeM0ZIydCm19byyr\" state=\"completed\" description=\"Review the parser fix\">\nNo blocking findings.\n</subagent>", "description": "Review the parser fix" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000005",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "synthetic",
+        "seq": 5,
+        "time_created": 1790600009100,
+        "time_updated": 1790600009100,
+        "data": { "time": { "created": 1790600009100 }, "text": "The previous response was interrupted. Continue from where you left off without repeating completed content." }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000006",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "assistant",
+        "seq": 6,
+        "time_created": 1790600009200,
+        "time_updated": 1790600009900,
+        "data": { "time": { "created": 1790600009200, "streamed": 1790600009500, "completed": 1790600009900 }, "agent": "build", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" }, "content": [ { "type": "text", "text": "Opened PR #2731." }, { "type": "tool", "id": "toolu_014JCBUtjLo8UwvgmRfCqxsE", "name": "edit", "executed": false, "state": { "status": "error", "input": { "path": "/repo/demo/CHANGELOG.md", "oldString": "## Unreleased", "newString": "## 1.2.0" }, "error": { "type": "unknown", "message": "oldString not found in content" } }, "time": { "created": 1790600009600, "ran": 1790600009610, "completed": 1790600009620 } } ], "finish": "tool-calls", "cost": 0 }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000007",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "shell",
+        "seq": 7,
+        "time_created": 1790600010000,
+        "time_updated": 1790600010500,
+        "data": { "time": { "created": 1790600010000, "completed": 1790600010500 }, "shellID": "sh_0e84bf223001llrLlaYLNLlK4a", "command": "git status --short", "status": "exited", "exit": 0, "output": { "output": "nothing to commit", "cursor": 17, "size": 17, "truncated": false } }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000008",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "synthetic",
+        "seq": 8,
+        "time_created": 1790600010600,
+        "time_updated": 1790600010600,
+        "data": { "metadata": { "source": "shell", "shellID": "sh_0e84bf223001llrLlaYLNLlK4a", "state": "completed", "truncated": false, "exit": 0 }, "time": { "created": 1790600010600 }, "text": "The following shell command was executed by the user:\n<shell id=\"sh_0e84bf223001llrLlaYLNLlK4a\" state=\"completed\" command=\"git status --short\">\nnothing to commit\n</shell>", "description": "git status --short" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000009",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "skill",
+        "seq": 9,
+        "time_created": 1790600011000,
+        "time_updated": 1790600011000,
+        "data": { "time": { "created": 1790600011000 }, "skill": "skl_release", "name": "release", "text": "# Release\n\nTag from main only." }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000010",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "compaction",
+        "seq": 10,
+        "time_created": 1790600012000,
+        "time_updated": 1790600013000,
+        "data": { "time": { "created": 1790600012000 }, "status": "completed", "reason": "auto", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" }, "summary": "## Objective\n- Ship the parser fix.", "recent": "Opened PR #2731.", "cost": 0, "tokens": { "input": 3000, "output": 200, "reasoning": 0, "cache": { "read": 0, "write": 0 } } }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000011",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "idle",
+        "seq": 11,
+        "time_created": 1790600013100,
+        "time_updated": 1790600013100,
+        "data": { "time": { "created": 1790600013100 }, "outcome": "succeeded" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000012",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "location-switched",
+        "seq": 12,
+        "time_created": 1790600013200,
+        "time_updated": 1790600013200,
+        "data": { "time": { "created": 1790600013200 }, "location": { "directory": "/repo/demo" }, "projectID": "4543ef05f941fa749aeee49424f45ba51263fe31", "subpath": "", "previous": { "location": { "directory": "/repo" }, "subpath": "" } }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000013",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "user",
+        "seq": 13,
+        "time_created": 1790600014000,
+        "time_updated": 1790600014000,
+        "data": { "metadata": { "source": "telegram", "telegram_message_id": 42 }, "time": { "created": 1790600014000 }, "text": "Thanks, ship it." }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000014",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "assistant",
+        "seq": 14,
+        "time_created": 1790600014100,
+        "time_updated": 1790600014900,
+        "data": { "time": { "created": 1790600014100, "streamed": 1790600014500, "completed": 1790600014900 }, "agent": "build", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" }, "content": [ { "type": "text", "text": "Building the release." }, { "type": "tool", "id": "toolu_0185LfzLFCjFzeDGnR5Wf3Yp", "name": "shell", "executed": false, "state": { "status": "completed", "input": { "command": "npm run build", "background": true }, "content": [ { "type": "text", "text": "Command moved to the background (shell ID: sh_0e84aacd7001hD1EEplKBz5KVr)." } ], "metadata": { "status": "running", "truncated": false, "shellID": "sh_0e84aacd7001hD1EEplKBz5KVr" } }, "time": { "created": 1790600014600, "ran": 1790600014610, "completed": 1790600014700 } } ], "finish": "tool-calls", "cost": 0 }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000015",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "synthetic",
+        "seq": 15,
+        "time_created": 1790600020000,
+        "time_updated": 1790600020000,
+        "data": { "metadata": { "source": "shell", "shellID": "sh_0e84aacd7001hD1EEplKBz5KVr", "jobID": "sh_0e84aacd7001hD1EEplKBz5KVr", "state": "error", "truncated": false, "exit": 1 }, "time": { "created": 1790600020000 }, "text": "<shell id=\"sh_0e84aacd7001hD1EEplKBz5KVr\" state=\"error\" command=\"npm run build\">\nbuild failed: missing dist/\n</shell>", "description": "npm run build" }
+      },
+      {
+        "id": "msg_0e84aacd7001parent00000016",
+        "session_id": "ses_f17ca477affeM7vJpYuwLTunDK",
+        "type": "assistant",
+        "seq": 16,
+        "time_created": 1790600020100,
+        "time_updated": 1790600020800,
+        "data": { "time": { "created": 1790600020100, "completed": 1790600020800 }, "agent": "build", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" }, "content": [ { "type": "text", "text": "The build failed; I will fix dist/ first." } ], "finish": "stop", "cost": 0 }
+      },
+      {
+        "id": "msg_0e84aacd7001child000000000",
+        "session_id": "ses_f17c42540ffeM0ZIydCm19byyr",
+        "type": "user",
+        "seq": 0,
+        "time_created": 1790600003010,
+        "time_updated": 1790600003010,
+        "data": { "time": { "created": 1790600003010 }, "text": "You are a subagent spawned by another session.\nReview src/parser.ts." }
+      },
+      {
+        "id": "msg_0e84aacd7001child000000001",
+        "session_id": "ses_f17c42540ffeM0ZIydCm19byyr",
+        "type": "assistant",
+        "seq": 1,
+        "time_created": 1790600003100,
+        "time_updated": 1790600008900,
+        "data": { "time": { "created": 1790600003100, "completed": 1790600008900 }, "agent": "general", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot", "variant": "max" }, "content": [ { "type": "text", "text": "No blocking findings." } ], "finish": "stop", "cost": 0 }
+      },
+      {
+        "id": "msg_0e84aacd7001self0000000000",
+        "session_id": "ses_f139e87ceffeqUsW26A55Cc7W1",
+        "type": "user",
+        "seq": 0,
+        "time_created": 1790600100010,
+        "time_updated": 1790600100010,
+        "data": { "time": { "created": 1790600100010 }, "text": "<!-- backpass:self-session -->\nReply with the single word OK and nothing else." }
+      },
+      {
+        "id": "msg_0e84aacd7001self0000000001",
+        "session_id": "ses_f139e87ceffeqUsW26A55Cc7W1",
+        "type": "assistant",
+        "seq": 1,
+        "time_created": 1790600100100,
+        "time_updated": 1790600100900,
+        "data": { "time": { "created": 1790600100100, "completed": 1790600100900 }, "agent": "build", "model": { "id": "claude-opus-5.5", "providerID": "github-copilot" }, "content": [ { "type": "text", "text": "OK" } ], "finish": "stop", "cost": 0 }
+      },
+      {
+        "id": "msg_0e84aacd7001selfchild00000",
+        "session_id": "ses_f139e880dffeSelfChildSess01",
+        "type": "user",
+        "seq": 0,
+        "time_created": 1790600100210,
+        "time_updated": 1790600100210,
+        "data": { "time": { "created": 1790600100210 }, "text": "You are a subagent spawned by another session.\nSummarize the trace." }
+      },
+      {
+        "id": "msg_0e84aacd7001resumed0000000",
+        "session_id": "ses_f0a1b2c3dffeResumedSession01",
+        "type": "user",
+        "seq": 0,
+        "time_created": 1780000000010,
+        "time_updated": 1780000000010,
+        "data": { "time": { "created": 1780000000010 }, "text": "Draft the release checklist." }
+      },
+      {
+        "id": "msg_0e84aacd7001resumed0000001",
+        "session_id": "ses_f0a1b2c3dffeResumedSession01",
+        "type": "user",
+        "seq": 1,
+        "time_created": 1790600200000,
+        "time_updated": 1790600200000,
+        "data": { "time": { "created": 1790600200000 }, "text": "Picking this up again: add the rollback step." }
+      }
+    ]
+  }
+}

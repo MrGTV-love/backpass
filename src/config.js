@@ -110,6 +110,15 @@ export const DEFAULT_CONFIG = {
      * `{ host, node, env, harnesses, connectTimeoutSeconds }`.
      */
     hosts: [],
+    /**
+     * More OpenCode stores to read alongside the default one: each an OpenCode data
+     * directory (holding `opencode.db`) or a database file, such as a copy of the store
+     * another OS's OpenCode app writes. Only what backpass reads changes; relocating
+     * OpenCode through the environment would also relocate the OpenCode backpass runs for
+     * analysis. Personal configuration only, like `hosts`: a repository file that sets it
+     * is refused by name. Absolute paths; `~` is expanded.
+     */
+    opencodeStores: [],
     minUserTurns: 2,
     includeCursorIde: false,
   },
@@ -464,23 +473,47 @@ function validate(config, { kind = "project", repoRoot = null } = {}) {
   if (config.discovery.hosts !== undefined && !Array.isArray(config.discovery.hosts)) {
     throw new UserError("config.discovery.hosts must be an array of ssh destinations");
   }
+  const stores = config.discovery.opencodeStores;
+  if (!Array.isArray(stores) || stores.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new UserError("config.discovery.opencodeStores must be an array of paths");
+  }
+  config.discovery.opencodeStores = stores.map((entry) => {
+    const expanded = expandHomePath(entry.trim());
+    if (!path.isAbsolute(expanded)) {
+      throw new UserError(
+        `config.discovery.opencodeStores entry "${entry}" is not an absolute path`,
+        "name the store's directory or database file from / or ~/; a transcript store is not a repository path",
+      );
+    }
+    return path.resolve(expanded);
+  });
   return config;
 }
 
 /**
- * A repository may not name a machine.
+ * A repository may not name a machine, or a transcript store.
  *
  * `.backpassrc.json` is checked in and shared, so a `discovery.hosts` there would let one
  * contributor point every other contributor's backpass at a host - which is exactly the
- * "someone else's transcripts" the vision resists. Hosts are personal configuration and
- * live in the person's own global file, or on the command line for one run.
+ * "someone else's transcripts" the vision resists. A `discovery.opencodeStores` entry
+ * would do the same with a path on their disk. Both are personal configuration and live
+ * in the person's own global file; a host can also be named on the command line for one
+ * run.
  */
-function refuseRepoHosts(repoFile, file) {
-  if (!repoFile?.discovery || repoFile.discovery.hosts === undefined) return;
-  throw new UserError(
-    `${file} sets discovery.hosts, but ssh hosts are personal configuration`,
-    `move them to ${userConfigPath()}, or pass --host <destination> for one run`,
-  );
+function refuseRepoPersonalSettings(repoFile, file) {
+  if (!repoFile?.discovery) return;
+  if (repoFile.discovery.hosts !== undefined) {
+    throw new UserError(
+      `${file} sets discovery.hosts, but ssh hosts are personal configuration`,
+      `move them to ${userConfigPath()}, or pass --host <destination> for one run`,
+    );
+  }
+  if (repoFile.discovery.opencodeStores !== undefined) {
+    throw new UserError(
+      `${file} sets discovery.opencodeStores, but transcript stores are personal configuration`,
+      `move them to ${userConfigPath()}`,
+    );
+  }
 }
 
 /**
@@ -491,9 +524,10 @@ function refuseRepoHosts(repoFile, file) {
  * User: defaults < user-scope defaults < ~/.config/backpass/config.json `user` block <
  *   CLI flags. `.backpassrc.json` is never read.
  *
- * `discovery.hosts` is the one setting a repository file may not carry at all
- * (`refuseRepoHosts`). In user scope it defaults to the global file's top-level list, so
- * a person names their machines once rather than once per scope.
+ * `discovery.hosts` and `discovery.opencodeStores` are the settings a repository file may
+ * not carry at all (`refuseRepoPersonalSettings`). In user scope they default to the
+ * global file's top-level lists, so a person names their machines and stores once rather
+ * than once per scope.
  */
 export function loadConfig(repoRoot, overrides = {}, { kind = "project" } = {}) {
   const scopeKind = parseScopeKind(kind);
@@ -506,15 +540,17 @@ export function loadConfig(repoRoot, overrides = {}, { kind = "project" } = {}) 
       (acc, layer) => (layer ? deepMerge(acc, layer) : acc),
       {},
     );
-    if (userBlock.discovery?.hosts === undefined && overrides.discovery?.hosts === undefined) {
-      merged.discovery.hosts = globalFile?.discovery?.hosts ?? DEFAULT_CONFIG.discovery.hosts;
+    for (const key of ["hosts", "opencodeStores"]) {
+      if (userBlock.discovery?.[key] === undefined && overrides.discovery?.[key] === undefined) {
+        merged.discovery[key] = globalFile?.discovery?.[key] ?? DEFAULT_CONFIG.discovery[key];
+      }
     }
   } else {
     const globalFile = readJsonIfPresent(userConfigPath());
     const projectGlobal = globalFile ? { ...globalFile } : null;
     if (projectGlobal) delete projectGlobal.user;
     const repoFile = repoRoot ? readJsonIfPresent(path.join(repoRoot, CONFIG_FILENAME)) : null;
-    refuseRepoHosts(repoFile, repoRoot ? path.join(repoRoot, CONFIG_FILENAME) : CONFIG_FILENAME);
+    refuseRepoPersonalSettings(repoFile, repoRoot ? path.join(repoRoot, CONFIG_FILENAME) : CONFIG_FILENAME);
     merged = [projectGlobal, repoFile, overrides].reduce(
       (acc, layer) => (layer ? deepMerge(acc, layer) : acc),
       DEFAULT_CONFIG,

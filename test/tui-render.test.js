@@ -231,7 +231,7 @@ test("discovery frame: header gauge, rail, per-harness rows, plain-language labe
   assert.ok(text.includes("git remote match"));
   assert.ok(text.includes("8,912/10,317 sessions"));
   assert.ok(text.includes("9 so far"));
-  assert.ok(text.includes("1 sqlite query"));
+  assert.ok(text.includes("sqlite store"));
   assert.ok(text.includes("store unreadable · harness skipped, run continues"));
   assert.ok(text.includes("fail-soft"));
   assert.ok(text.includes("new = not seen by a previous scan"));
@@ -239,6 +239,23 @@ test("discovery frame: header gauge, rail, per-harness rows, plain-language labe
   assert.ok(!text.includes("tier"));
   assert.ok(!text.includes("rollout"));
   assert.ok(!/\bmatched\b/.test(text));
+});
+
+test("SQLite discovery rows describe the store without claiming a query count", () => {
+  for (const harness of ["opencode", "hermes"]) {
+    const state = stateAfter([
+      ["discover:start", { harnesses: [harness] }],
+      ["discover:harness:start", { harness }],
+      ["discover:harness:done", { harness, scanned: 4, matched: 4 }],
+    ]);
+    for (const width of [110, 80, 62]) {
+      const row = render(state, { width }).find((line) => line.includes(harness));
+      assert.ok(row, `${harness} row is visible at width ${width}`);
+      assert.match(row, /sqlite store/);
+      assert.doesNotMatch(row, /sqlite query/);
+      assert.match(row, /4 this repo/);
+    }
+  }
 });
 
 test("every line fits the terminal and the header box is intact", () => {

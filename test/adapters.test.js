@@ -13,10 +13,12 @@ import * as pi from "../src/discovery/adapters/pi.js";
 import * as grok from "../src/discovery/adapters/grok.js";
 import * as cursorCli from "../src/discovery/adapters/cursor-cli.js";
 import * as hermes from "../src/discovery/adapters/hermes.js";
+import * as opencode from "../src/discovery/adapters/opencode.js";
 import { statOrNull } from "../src/discovery/adapters/shared.js";
 import { associate } from "../src/discovery/association.js";
 import { discoverTranscripts } from "../src/discovery/index.js";
 import { associateUser } from "../src/scope.js";
+import { readOpencodeFixture, withOpencodeHome, writeOpencodeStore } from "./helpers/opencode.js";
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -808,4 +810,213 @@ test("normal discovery associates only trustworthy Hermes TUI sessions in projec
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("opencode test homes are removed and HOME restored on success and failure", async () => {
+  const original = process.env.HOME;
+  try {
+    for (const previous of [undefined, FIXTURES]) {
+      for (const failure of [null, "build", "callback"]) {
+        if (previous === undefined) delete process.env.HOME;
+        else process.env.HOME = previous;
+        let temporaryHome;
+        const error = new Error("fixture failure");
+        const result = withOpencodeHome(
+          (dbFile) => {
+            temporaryHome = path.resolve(dbFile, "../../../..");
+            assert.ok(fs.existsSync(temporaryHome));
+            if (failure === "build") throw error;
+          },
+          async () => {
+            assert.equal(process.env.HOME, temporaryHome);
+            if (failure === "callback") throw error;
+            return "done";
+          },
+        );
+        if (failure) await assert.rejects(result, (caught) => caught === error);
+        else assert.equal(await result, "done");
+        assert.equal(process.env.HOME, previous);
+        assert.equal(fs.existsSync(temporaryHome), false);
+      }
+    }
+  } finally {
+    if (original === undefined) delete process.env.HOME;
+    else process.env.HOME = original;
+  }
+});
+
+const V2_PARENT = "ses_f17ca477affeM7vJpYuwLTunDK";
+const V2_CHILD = "ses_f17c42540ffeM0ZIydCm19byyr";
+const V2_SELF = "ses_f139e87ceffeqUsW26A55Cc7W1";
+const V2_SELF_CHILD = "ses_f139e880dffeSelfChildSess01";
+const V2_RESUMED = "ses_f0a1b2c3dffeResumedSession01";
+
+test("opencode adapter lists an OpenCode 2 store by session_v2, dated by its newest message", async () => {
+  await withOpencodeHome(
+    (dbFile) => writeOpencodeStore(dbFile, readOpencodeFixture("opencode-v2-store.json")),
+    async (dbFile) => {
+      const rows = await opencode.discover({ cutoffMs: null });
+      const byId = new Map(rows.map((row) => /** @type {[string, any]} */ ([row.id, row])));
+      assert.deepEqual([...byId.keys()].sort(), [V2_RESUMED, V2_SELF, V2_SELF_CHILD, V2_CHILD, V2_PARENT].sort());
+      assert.ok(!byId.has("ses_f1378472bffeProbeEmptySess1"), "a session with no messages recorded nothing");
+      const parent = byId.get(V2_PARENT);
+      assert.equal(parent.cwd, "/repo/demo");
+      assert.equal(parent.gitRoot, "/repo/demo");
+      assert.equal(parent.path, dbFile);
+      assert.equal(parent.title, "Parser fix");
+      assert.equal(parent.startedAt, 1790600000000);
+      assert.equal(parent.mtimeMs, 1790600020800, "session_v2.time_updated does not move; the newest message does");
+      assert.deepEqual(parent.extra, { sessionId: V2_PARENT, layout: "v2" });
+      assert.equal(byId.get(V2_CHILD).interactionSignals.parentId, V2_PARENT, "a subagent session is a child");
+      assert.equal(byId.get(V2_CHILD).self, false, "a genuine session's subagent is genuine too");
+      assert.equal(byId.get(V2_SELF).self, true, "an acpx prompt opens with the sentinel");
+      assert.equal(byId.get(V2_SELF_CHILD).self, true, "work backpass's own agent delegated is backpass's too");
+      assert.equal(parent.self, false);
+
+      const resumed = await opencode.discover({ cutoffMs: 1790600100000 });
+      assert.ok(
+        resumed.some((row) => row.id === V2_RESUMED),
+        "a session created long ago but written to recently passes the window",
+      );
+      assert.ok(!resumed.some((row) => row.id === V2_PARENT));
+      assert.deepEqual(await opencode.discover({ cutoffMs: 1790600300000 }), []);
+    },
+  );
+});
+
+test("opencode adapter counts epoch-dated messages as recorded", async () => {
+  const fixture = readOpencodeFixture("opencode-v2-store.json");
+  for (const message of fixture.rows.session_message) message.time_updated = 0;
+  await withOpencodeHome(
+    (dbFile) => writeOpencodeStore(dbFile, fixture),
+    async () => {
+      const rows = await opencode.discover({ cutoffMs: null });
+      assert.deepEqual(
+        rows.map((row) => row.id).sort(),
+        [V2_RESUMED, V2_SELF, V2_SELF_CHILD, V2_CHILD, V2_PARENT].sort(),
+      );
+    },
+  );
+});
+
+test("opencode adapter reads an OpenCode 2 session: turns and calls in order, harness text left out", async () => {
+  await withOpencodeHome(
+    (dbFile) => writeOpencodeStore(dbFile, readOpencodeFixture("opencode-v2-store.json")),
+    async () => {
+      const [parent] = (await opencode.discover({ cutoffMs: null })).filter((row) => row.id === V2_PARENT);
+      const { events, model } = await opencode.read(parent);
+      assert.equal(model, "claude-opus-5.5");
+      assert.deepEqual(
+        events.map((event) =>
+          event.kind === "message"
+            ? `${event.role}: ${event.text}`
+            : `tool ${event.name} ${JSON.stringify(event.input)} [${event.status}] -> ${event.result ?? ""}`,
+        ),
+        [
+          "user: Open a PR for the parser fix.",
+          "assistant: I'll run the tests first.",
+          'tool shell {"command":"npm test","workdir":"/repo/demo"} [completed] -> 2 passing',
+          'tool read {"path":"/repo/demo/src/parser.ts"} [completed] -> Read file /repo/demo/src/parser.ts, lines 1-1\n1: export function parse() {}',
+          'tool subagent {"agent":"general","description":"Review the parser fix","background":true,"prompt":"You are a subagent spawned by another session.\\nReview src/parser.ts."} [completed] -> <subagent sessionID="ses_f17c42540ffeM0ZIydCm19byyr" state="completed" description="Review the parser fix">\nNo blocking findings.\n</subagent>',
+          "assistant: Opened PR #2731.",
+          'tool edit {"path":"/repo/demo/CHANGELOG.md","oldString":"## Unreleased","newString":"## 1.2.0"} [error] -> oldString not found in content',
+          'tool shell {"command":"git status --short"} [completed] -> nothing to commit',
+          'tool skill {"name":"release"} [completed] -> ',
+          "user: Thanks, ship it.",
+          "assistant: Building the release.",
+          'tool shell {"command":"npm run build","background":true} [error] -> <shell id="sh_0e84aacd7001hD1EEplKBz5KVr" state="error" command="npm run build">\nbuild failed: missing dist/\n</shell>',
+          "assistant: The build failed; I will fix dist/ first.",
+        ],
+      );
+      const raw = JSON.stringify(events);
+      for (const harnessText of [
+        "Instructions from",
+        "Today's date",
+        "The previous response was interrupted",
+        "The following shell command was executed by the user",
+        "## Objective",
+        "Tag from main only",
+        "internal reasoning",
+        "OPAQUE",
+      ]) {
+        assert.ok(!raw.includes(harnessText), `${harnessText} is harness text, not session signal`);
+      }
+
+      const byRef = await opencode.read({ id: V2_PARENT });
+      assert.deepEqual(byRef.events, events, "a ref recorded before the layout was is looked up the same way");
+    },
+  );
+});
+
+test("opencode adapter still reads an OpenCode 1.x store, which leaves session_message empty", async () => {
+  await withOpencodeHome(
+    (dbFile) => writeOpencodeStore(dbFile, readOpencodeFixture("opencode-v1-store.json")),
+    async () => {
+      const [row, ...rest] = await opencode.discover({ cutoffMs: null });
+      assert.deepEqual(rest, []);
+      assert.equal(row.id, "ses_f16e2d036ffeZd4lFcWRZCBMYV");
+      assert.deepEqual(row.extra, { sessionId: row.id, layout: "v1" });
+      assert.equal(row.mtimeMs, 1790605324420);
+      assert.equal(row.self, false);
+      const { events, model } = await opencode.read(row);
+      assert.equal(model, "gpt-5.6-terra");
+      assert.deepEqual(
+        events.map((event) => (event.kind === "message" ? `${event.role}: ${event.text}` : `tool ${event.name}`)),
+        [
+          "user: Open a PR for the parser fix.",
+          "tool bash",
+          "assistant: I'll run the tests first.",
+          "assistant: Opened PR #2731.",
+        ],
+      );
+      const [call] = tools(events);
+      assert.equal(call.input.command, "npm test");
+      assert.equal(call.result, "2 passing\n");
+      assert.ok(!JSON.stringify(events).includes("internal reasoning"));
+    },
+  );
+});
+
+test("an upgraded opencode store is read from session_v2, where each copied session continues", async () => {
+  const v1 = readOpencodeFixture("opencode-v1-store.json");
+  const v2 = readOpencodeFixture("opencode-v2-store.json");
+  await withOpencodeHome(
+    (dbFile) => {
+      writeOpencodeStore(dbFile, v2);
+      // What the upgrade leaves behind: the 1.x tables, holding a copy of a session that
+      // now lives in session_v2 and one that was never copied.
+      const projectId = v2.rows.project[0].id;
+      const sessions = v1.rows.session.map((row) => ({ ...row, project_id: projectId }));
+      sessions.push({ ...sessions[0], id: V2_PARENT, title: "stale 1.x copy" });
+      writeOpencodeStore(
+        dbFile,
+        { schema: v1.schema, rows: { session: sessions, message: v1.rows.message, part: v1.rows.part } },
+        { skipTables: ["project", "session_message"] },
+      );
+    },
+    async () => {
+      const rows = await opencode.discover({ cutoffMs: null });
+      const layouts = Object.fromEntries(rows.map((row) => [row.id, row.extra.layout]));
+      assert.equal(rows.filter((row) => row.id === V2_PARENT).length, 1, "one session, listed once");
+      assert.equal(layouts[V2_PARENT], "v2");
+      assert.equal(layouts["ses_f16e2d036ffeZd4lFcWRZCBMYV"], "v1");
+      const parent = rows.find((row) => row.id === V2_PARENT);
+      assert.equal(parent.title, "Parser fix");
+      assert.equal(messages((await opencode.read(parent)).events)[0].text, "Open a PR for the parser fix.");
+    },
+  );
+});
+
+test("an opencode store with neither session table is named as drifted, never read as empty", async () => {
+  await withOpencodeHome(
+    (dbFile) => {
+      fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+      const db = new DatabaseSync(dbFile);
+      db.exec("CREATE TABLE unrelated (id INTEGER)");
+      db.close();
+    },
+    async () => {
+      await assert.rejects(opencode.discover({ cutoffMs: null }), /unrecognised opencode store/);
+    },
+  );
 });

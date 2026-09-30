@@ -1,0 +1,122 @@
+{
+  "comment": "OpenCode 1.x store (1.18.32): DDL copied from a real opencode.db, rows modeled field-for-field on real message and part rows with the text replaced. 1.x also creates the session_message table its successor uses, empty.",
+  "schema": [
+    "CREATE TABLE `project` (\n          `id` text PRIMARY KEY,\n          `worktree` text NOT NULL,\n          `vcs` text,\n          `name` text,\n          `icon_url` text,\n          `icon_url_override` text,\n          `icon_color` text,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `time_initialized` integer,\n          `sandboxes` text NOT NULL,\n          `commands` text\n        )",
+    "CREATE TABLE `session` (\n          `id` text PRIMARY KEY,\n          `project_id` text NOT NULL,\n          `workspace_id` text,\n          `parent_id` text,\n          `slug` text NOT NULL,\n          `directory` text NOT NULL,\n          `path` text,\n          `title` text NOT NULL,\n          `version` text NOT NULL,\n          `share_url` text,\n          `summary_additions` integer,\n          `summary_deletions` integer,\n          `summary_files` integer,\n          `summary_diffs` text,\n          `metadata` text,\n          `cost` real DEFAULT 0 NOT NULL,\n          `tokens_input` integer DEFAULT 0 NOT NULL,\n          `tokens_output` integer DEFAULT 0 NOT NULL,\n          `tokens_reasoning` integer DEFAULT 0 NOT NULL,\n          `tokens_cache_read` integer DEFAULT 0 NOT NULL,\n          `tokens_cache_write` integer DEFAULT 0 NOT NULL,\n          `revert` text,\n          `permission` text,\n          `agent` text,\n          `model` text,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `time_compacting` integer,\n          `time_archived` integer,\n          CONSTRAINT `fk_session_project_id_project_id_fk` FOREIGN KEY (`project_id`) REFERENCES `project`(`id`) ON DELETE CASCADE\n        )",
+    "CREATE INDEX `session_project_idx` ON `session` (`project_id`)",
+    "CREATE INDEX `session_workspace_idx` ON `session` (`workspace_id`)",
+    "CREATE INDEX `session_parent_idx` ON `session` (`parent_id`)",
+    "CREATE TABLE `message` (\n          `id` text PRIMARY KEY,\n          `session_id` text NOT NULL,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `data` text NOT NULL,\n          CONSTRAINT `fk_message_session_id_session_id_fk` FOREIGN KEY (`session_id`) REFERENCES `session`(`id`) ON DELETE CASCADE\n        )",
+    "CREATE INDEX `message_session_time_created_id_idx` ON `message` (`session_id`,`time_created`,`id`)",
+    "CREATE TABLE `part` (\n          `id` text PRIMARY KEY,\n          `message_id` text NOT NULL,\n          `session_id` text NOT NULL,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `data` text NOT NULL,\n          CONSTRAINT `fk_part_message_id_message_id_fk` FOREIGN KEY (`message_id`) REFERENCES `message`(`id`) ON DELETE CASCADE\n        )",
+    "CREATE INDEX `part_message_id_id_idx` ON `part` (`message_id`,`id`)",
+    "CREATE INDEX `part_session_idx` ON `part` (`session_id`)",
+    "CREATE TABLE `session_message` (\n          `id` text PRIMARY KEY,\n          `session_id` text NOT NULL,\n          `type` text NOT NULL,\n          `seq` integer NOT NULL,\n          `time_created` integer NOT NULL,\n          `time_updated` integer NOT NULL,\n          `data` text NOT NULL,\n          CONSTRAINT `fk_session_message_session_id_session_id_fk` FOREIGN KEY (`session_id`) REFERENCES `session`(`id`) ON DELETE CASCADE\n        )"
+  ],
+  "rows": {
+    "project": [
+      {
+        "id": "28f22e59894e2c9ac7a8b3d6f5a5e3e41d2b7c10",
+        "worktree": "/repo/demo",
+        "vcs": "git",
+        "time_created": 1790605000000,
+        "time_updated": 1790605000000,
+        "sandboxes": "[]"
+      }
+    ],
+    "session": [
+      {
+        "id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "project_id": "28f22e59894e2c9ac7a8b3d6f5a5e3e41d2b7c10",
+        "parent_id": null,
+        "slug": "gentle-comet",
+        "directory": "/repo/demo",
+        "title": "Parser fix",
+        "version": "1.18.32",
+        "time_created": 1790605317380,
+        "time_updated": 1790605324420
+      }
+    ],
+    "message": [
+      {
+        "id": "msg_0e864d504001D08PKrPyomGw72",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605317380,
+        "time_updated": 1790605317380,
+        "data": { "role": "user", "time": { "created": 1790605317380 }, "agent": "build", "model": { "providerID": "github-copilot", "modelID": "gpt-5.6-terra" }, "summary": { "diffs": [] } }
+      },
+      {
+        "id": "msg_0e864d51f001xQ2ZXd1YkNT6Ub",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605317429,
+        "time_updated": 1790605324420,
+        "data": { "parentID": "msg_0e864d504001D08PKrPyomGw72", "role": "assistant", "mode": "build", "agent": "build", "path": { "cwd": "/repo/demo", "root": "/repo/demo" }, "cost": 0.0210735, "tokens": { "total": 8411, "input": 8406, "output": 5, "reasoning": 0, "cache": { "write": 0, "read": 0 } }, "modelID": "gpt-5.6-terra", "providerID": "github-copilot", "time": { "created": 1790605317429, "completed": 1790605324420 }, "finish": "tool-calls" }
+      },
+      {
+        "id": "msg_0e864d6ab001fM3kC8wqJ0sQyL",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605324500,
+        "time_updated": 1790605325000,
+        "data": { "parentID": "msg_0e864d504001D08PKrPyomGw72", "role": "assistant", "mode": "build", "agent": "build", "path": { "cwd": "/repo/demo", "root": "/repo/demo" }, "cost": 0.001, "modelID": "gpt-5.6-terra", "providerID": "github-copilot", "time": { "created": 1790605324500, "completed": 1790605325000 }, "finish": "stop" }
+      }
+    ],
+    "part": [
+      {
+        "id": "prt_0e864d504002aT0SjrP1h8QmZ3",
+        "message_id": "msg_0e864d504001D08PKrPyomGw72",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605317380,
+        "time_updated": 1790605317380,
+        "data": { "type": "text", "text": "Open a PR for the parser fix." }
+      },
+      {
+        "id": "prt_0e864d520001Ry7iH2XjV9nKcP",
+        "message_id": "msg_0e864d51f001xQ2ZXd1YkNT6Ub",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605317430,
+        "time_updated": 1790605317430,
+        "data": { "type": "step-start", "snapshot": "f48752d17359ebb3869344a9d8aa578704c78bed" }
+      },
+      {
+        "id": "prt_0e864d521001bqL5mW3sVx8dTe",
+        "message_id": "msg_0e864d51f001xQ2ZXd1YkNT6Ub",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605317440,
+        "time_updated": 1790605318000,
+        "data": { "type": "reasoning", "text": "internal reasoning about the parser", "time": { "start": 1790605317440, "end": 1790605318000 }, "metadata": { "copilot": { "itemId": "OPAQUE" } } }
+      },
+      {
+        "id": "prt_0e864d522001Hc4nPz7uTg1wXa",
+        "message_id": "msg_0e864d51f001xQ2ZXd1YkNT6Ub",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605318010,
+        "time_updated": 1790605318010,
+        "data": { "type": "text", "text": "I'll run the tests first.", "time": { "start": 1790605318010, "end": 1790605318010 } }
+      },
+      {
+        "id": "prt_0e864d523001Kq9vBn2cLr5yMd",
+        "message_id": "msg_0e864d51f001xQ2ZXd1YkNT6Ub",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605318020,
+        "time_updated": 1790605324000,
+        "data": { "type": "tool", "tool": "bash", "callID": "call_jIlQmostJGFXrjUPNc4XhB1E", "state": { "status": "completed", "input": { "command": "npm test", "workdir": "/repo/demo" }, "output": "2 passing\n", "metadata": { "output": "2 passing\n", "exit": 0, "truncated": false }, "title": "npm test", "time": { "start": 1790605318020, "end": 1790605324000 } } }
+      },
+      {
+        "id": "prt_0e864d524001Wm6xFt3pQj8rNb",
+        "message_id": "msg_0e864d51f001xQ2ZXd1YkNT6Ub",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605324400,
+        "time_updated": 1790605324400,
+        "data": { "reason": "tool-calls", "snapshot": "f48752d17359ebb3869344a9d8aa578704c78bed", "type": "step-finish", "tokens": { "total": 8411, "input": 8406, "output": 5, "reasoning": 0, "cache": { "write": 0, "read": 0 } }, "cost": 0.0210735 }
+      },
+      {
+        "id": "prt_0e864d6ac001Zs3bYh7kNw2qVe",
+        "message_id": "msg_0e864d6ab001fM3kC8wqJ0sQyL",
+        "session_id": "ses_f16e2d036ffeZd4lFcWRZCBMYV",
+        "time_created": 1790605324600,
+        "time_updated": 1790605324600,
+        "data": { "type": "text", "text": "Opened PR #2731." }
+      }
+    ]
+  }
+}

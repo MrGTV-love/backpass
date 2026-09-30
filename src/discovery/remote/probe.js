@@ -72,7 +72,9 @@ async function descriptorFrom(adapter, row, id) {
   const content = adapter.sqliteBacked ? await adapter.read(row) : null;
   const contentSignature = content ? eventSignature(content) : null;
   const firstUser = content?.events?.find((event) => event?.kind === "message" && event.role === "user");
-  const self = typeof firstUser?.text === "string" && firstUser.text.startsWith(SELF_SESSION_SENTINEL);
+  // An explicit store-level decision includes openings omitted by normalized events
+  // (for example attachment-only OpenCode messages). Only fall back when it is absent.
+  const self = row.self ?? (typeof firstUser?.text === "string" && firstUser.text.startsWith(SELF_SESSION_SENTINEL));
   return {
     self,
     descriptor: {

@@ -43,8 +43,8 @@ export function getAdapter(harness) {
  * Re-scans are then O(new files) - which matters: codex alone had 10,317 rollouts on
  * the machine this was designed against.
  *
- * SQLite-backed stores (opencode, hermes, cursor IDE) answer the same question with one
- * indexed query, so they skip the cache entirely.
+ * SQLite-backed stores (opencode, hermes, cursor IDE) query session metadata directly,
+ * so they skip the file-header cache entirely.
  *
  * Every harness is fail-soft: a store that is missing, unreadable, or has drifted into
  * an unrecognised format produces a named warning and is skipped, never a failed run.
@@ -281,7 +281,12 @@ function tierCounts(found) {
 }
 
 async function discoverDirect(adapter, { repo, config, cutoffMs, strict, stats, associateFn, stateDir, userFilter }) {
-  const rows = await adapter.discover({ cutoffMs, repo, config });
+  const rows = await adapter.discover({
+    cutoffMs,
+    repo,
+    config,
+    warn: (message) => warn(`${adapter.name}: ${message}`),
+  });
   const out = [];
   for (const row of rows) {
     stats.scanned += 1;
@@ -295,7 +300,9 @@ async function discoverDirect(adapter, { repo, config, cutoffMs, strict, stats, 
       stats.skipped += 1;
       continue;
     }
-    if (isSelfSession(transcript, { stateDir })) {
+    // A SQLite store has no per-session file to inspect; its adapter marks backpass's own
+    // sessions from the store itself (see ./self.js).
+    if (row.self || isSelfSession(transcript, { stateDir, readHead: !adapter.sqliteBacked })) {
       stats.self += 1;
       continue;
     }

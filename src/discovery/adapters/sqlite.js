@@ -29,8 +29,8 @@ async function loadDriver() {
 }
 
 /**
- * Open a SQLite file read-only. Returns null (never throws) when the store is missing,
- * locked, or the driver is unavailable - discovery is fail-soft per harness.
+ * Open a SQLite file read-only. A missing store returns null; driver and open errors
+ * propagate so discovery can report them at the owning store or harness boundary.
  */
 export async function openReadOnly(file) {
   if (!fs.existsSync(file)) return null;
