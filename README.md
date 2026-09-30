@@ -375,6 +375,10 @@ full cache key is stale. They become eligible again only when that complete key 
 and the selected-sample and interaction-stamp rules below apply; evidence for transcripts
 included in the new analysis is replaced with fresh judgments.
 
+If an analysis worker hits a fatal error, backpass stops handing out new transcripts and waits for every worker to stop before reporting the first fatal error.
+Calls already in flight finish, and their successful evidence is cached for reuse.
+Per-transcript failures, such as timeouts or unparseable output, still let the run continue; they are recorded, listed by `backpass status`, and retried on the next run.
+
 ### 4. Aggregate gradients - and one judged consolidation call
 
 Evidence is grouped by instruction, giving each one a positive/negative count, a count of

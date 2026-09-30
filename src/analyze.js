@@ -351,19 +351,33 @@ async function analyzeOne({
  * Bounded-concurrency worker pool - the design's `--jobs N` fan-out.
  * The worker also receives its runner slot so the progress view can show one
  * lane per job.
+ *
+ * A worker error is fatal to the run (per-transcript failures never reach here), so the
+ * first one stops the pool from handing out more items: without that, the other runners
+ * kept taking transcripts and making model calls after the run had already reported the
+ * failure. Calls already in flight finish and keep their results; the first error is
+ * rethrown once every runner has stopped, so nothing is still running when it surfaces.
  */
 async function pool(items, limit, worker) {
   const results = new Array(items.length);
   let cursor = 0;
+  /** @type {{ err: unknown } | null} */
+  let failure = null;
   const runners = Array.from({ length: Math.min(limit, items.length) }, async (_, slot) => {
-    for (;;) {
+    while (!failure) {
       const index = cursor;
       cursor += 1;
       if (index >= items.length) return;
-      results[index] = await worker(items[index], index, slot);
+      try {
+        results[index] = await worker(items[index], index, slot);
+      } catch (err) {
+        failure ??= { err };
+        return;
+      }
     }
   });
   await Promise.all(runners);
+  if (failure) throw failure.err;
   return results;
 }
 
