@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { associate, globToRegExp, passesStrict } from "../src/discovery/association.js";
+import { isWindowsPath, localPath } from "../src/discovery/paths.js";
 import { normalizeRemote } from "../src/repo.js";
 
 /** A repo identity backed by one real directory, so tier-1/tier-3 liveness is genuine. */
@@ -92,6 +93,72 @@ test("tier 1.5: a live sibling clone is deterministic, not a foreign live path",
 
   const other = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "demo-other-")));
   assert.equal(associate({ cwd: other }, repo), null);
+});
+
+/** Run `fn` with the process cwd inside `dir`, the way `backpass` runs from inside a checkout. */
+function fromInside(dir, fn) {
+  const previous = process.cwd();
+  process.chdir(dir);
+  try {
+    return fn();
+  } finally {
+    process.chdir(previous);
+  }
+}
+
+const WINDOWS_CWDS = [
+  "C:\\work\\demo",
+  "C:/work/demo",
+  "D:\\Projects\\foo",
+  "\\\\server\\share\\demo",
+  "//server/share/demo",
+];
+
+test(
+  "a Windows cwd matches no path tier on POSIX, even when backpass runs inside the clone",
+  { skip: process.platform === "win32" && "Windows spells these paths natively" },
+  () => {
+    const { repo, live } = makeRepo();
+    fromInside(live, () => {
+      for (const cwd of WINDOWS_CWDS) {
+        assert.equal(associate({ cwd }, repo), null, `${cwd} is no path on this machine`);
+        assert.equal(associate({ cwd, gitRoot: cwd }, repo), null, `${cwd} as a recorded root matches nothing either`);
+        assert.equal(
+          associate({ cwd, remotes: [] }, repo, { worktreeGlobs: ["**"] }),
+          null,
+          `${cwd} never reaches the best-effort tier`,
+        );
+      }
+      const remote = associate({ cwd: "C:\\work\\demo", remotes: ["git@github.com:acme/demo.git"] }, repo);
+      assert.equal(remote.tier, 2, "a recorded remote still associates the session");
+    });
+  },
+);
+
+test("a Windows cwd from another machine reaches no tier over there either", () => {
+  const { repo } = makeRepo();
+  const facts = { "C:/work/demo": { exists: false, real: "C:/work/demo" } };
+  assert.equal(associate({ cwd: "C:/work/demo" }, repo, { facts, host: "mac-home" }), null);
+  const remote = associate({ cwd: "C:/work/demo", remotes: ["https://github.com/acme/demo"] }, repo, {
+    facts,
+    host: "mac-home",
+  });
+  assert.equal(remote.tier, 2);
+});
+
+test("localPath refuses a Windows path only where it names no place", () => {
+  for (const cwd of WINDOWS_CWDS) {
+    assert.equal(isWindowsPath(cwd), true, cwd);
+    assert.equal(localPath(cwd, { platform: "linux" }), null, cwd);
+    assert.equal(localPath(cwd, { platform: "darwin" }), null, cwd);
+    assert.equal(localPath(cwd, { platform: "win32" }), cwd, cwd);
+  }
+  for (const posix of ["/home/me/demo", "relative/demo", "/", "a:b/c"]) {
+    assert.equal(isWindowsPath(posix), false, posix);
+    assert.equal(localPath(posix, { platform: "linux" }), posix, posix);
+  }
+  assert.equal(localPath("", { platform: "linux" }), null);
+  assert.equal(localPath(null, { platform: "linux" }), null);
 });
 
 test("--strict keeps only the deterministic tiers", () => {

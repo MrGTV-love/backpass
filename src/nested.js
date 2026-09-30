@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readTranscript } from "./discovery/index.js";
+import { localPath } from "./discovery/paths.js";
 import { UserError, warn } from "./logger.js";
 import {
   memorySetHash,
@@ -49,7 +50,7 @@ import { transcriptIdentity } from "./transcript.js";
  * single-primary run it always was.
  */
 
-export const ATTRIBUTION_VERSION = 3;
+export const ATTRIBUTION_VERSION = 4;
 
 /** Tool-input fields that name a file or directory a session worked in. */
 const PATH_FIELDS = ["file_path", "filePath", "notebook_path", "path"];
@@ -271,14 +272,21 @@ export function toolPaths(events) {
 
 /**
  * Where one session worked, as sorted repo-relative paths from tool calls, falling back
- * to its cwd when no tool paths are recorded. Paths outside known checkouts are dropped.
+ * to its cwd when no tool paths are recorded. Paths outside known checkouts are dropped,
+ * and so is a path this machine cannot spell (`localPath`): a Windows path read on a
+ * POSIX host is never resolved against the cwd, and neither is a relative path whose
+ * call ran in such a workdir.
  */
 export function workedPaths(transcript, events, roots) {
-  const cwd = path.isAbsolute(transcript.cwd || "") ? transcript.cwd : null;
+  const recordedCwd = localPath(transcript.cwd);
+  const cwd = recordedCwd && path.isAbsolute(recordedCwd) ? recordedCwd : null;
   const out = new Set();
   const named = toolPaths(events);
   if (!named.length && cwd) named.push({ raw: cwd, workdir: null });
-  for (const { raw, workdir } of named) {
+  for (const entry of named) {
+    const raw = localPath(entry.raw);
+    const workdir = entry.workdir === null ? null : localPath(entry.workdir);
+    if (raw === null || (entry.workdir !== null && workdir === null)) continue;
     if (raw.startsWith("~") || workdir?.startsWith("~")) continue;
     const base = workdir ? (path.isAbsolute(workdir) ? workdir : cwd ? path.resolve(cwd, workdir) : null) : cwd;
     if (!path.isAbsolute(raw) && !base) continue;

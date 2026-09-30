@@ -135,6 +135,23 @@ test("user --strict drops sessions with only a dead unrecognisable cwd", () => {
   assert.ok(kept.project);
 });
 
+test(
+  "a Windows cwd keeps its recorded spelling as the user-scope key, wherever backpass runs",
+  { skip: process.platform === "win32" && "Windows spells this path natively" },
+  () => {
+    const previous = process.cwd();
+    process.chdir(initRepo("elsewhere"));
+    try {
+      const kept = associateUser({ cwd: "C:\\work\\demo" });
+      assert.equal(kept.tier, 3);
+      assert.equal(kept.project, "C:\\work\\demo", "never resolved under the process cwd");
+      assert.equal(associateUser({ cwd: "C:\\work\\demo" }, { strict: true }), null);
+    } finally {
+      process.chdir(previous);
+    }
+  },
+);
+
 test("passesProjectFilter includes and excludes by project key or cwd", () => {
   const transcript = { project: "/repos/alpha", cwd: "/repos/alpha" };
   assert.equal(passesProjectFilter(transcript, { discovery: {} }), true);

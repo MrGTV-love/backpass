@@ -262,6 +262,24 @@ test("relative tool paths require an absolute recorded base, not the backpass pr
   assert.deepEqual(workedPaths({ cwd: "apps/api" }, relative, roots), []);
 });
 
+test(
+  "a Windows tool path or workdir is never resolved against a POSIX cwd",
+  { skip: process.platform === "win32" && "Windows spells these paths natively" },
+  () => {
+    const repo = makeRepo({ "apps/api/AGENTS.md": "# API\n" });
+    const roots = checkoutRoots(repo);
+    const events = [
+      { kind: "tool", input: { filePath: "C:\\Users\\me\\notes.md" } },
+      { kind: "tool", input: { path: "\\\\server\\share\\apps\\api\\x.ts" } },
+      { kind: "tool", input: { path: "src/orders.ts", workdir: "C:\\work\\apps\\api" } },
+      { kind: "tool", input: "*** Begin Patch\n*** Update File: D:/work/apps/api/y.ts\n*** End Patch" },
+      { kind: "tool", input: { path: "apps/api/handler.ts" } },
+    ];
+    assert.deepEqual(workedPaths({ cwd: repo.root }, events, roots), ["apps/api/handler.ts"]);
+    assert.deepEqual(workedPaths({ cwd: "C:\\work" }, [], roots), [], "a Windows cwd places nothing either");
+  },
+);
+
 test("out-of-repo paths do not make in-repo API work cross-cutting", async () => {
   const repo = makeRepo({ "apps/api/AGENTS.md": "# API\n" });
   const paths = workedPaths(
