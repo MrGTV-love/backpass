@@ -118,6 +118,32 @@ function notFoundError(result) {
 export const SESSION_CREATE_TIMEOUT_MS = 180_000;
 
 /**
+ * acpx's own exit code for a call it ended at a timeout (`EXIT_CODES.TIMEOUT` in acpx):
+ * its `--timeout` budget on a prompt, or an adapter that did not start or create a
+ * session in time. It is the same event as backpass's outer kill (`result.timedOut`), so
+ * it is named a timeout by the same checks, before any generic exit handling: read as an
+ * ordinary failure, a pinned agent's long prompt stopped the whole run as "failed
+ * unexpectedly (exit 3)" instead of failing that one transcript for a retry.
+ */
+export const ACPX_EXIT_TIMEOUT = 3;
+
+/** backpass's outer kill or acpx's own timeout exit. */
+function endedAtTimeout(result) {
+  return Boolean(result.timedOut) || result.code === ACPX_EXIT_TIMEOUT;
+}
+
+function timeoutMessage(result, agent, label, outerMessage) {
+  if (result.timedOut) return outerMessage;
+  const detail = firstLine(
+    (result.stderr || "")
+      .split("\n")
+      .filter((line) => !line.startsWith("[acpx]") || line.startsWith("[acpx] error:"))
+      .join("\n"),
+  );
+  return `acpx ${agent} ${label} ended at its own timeout (exit ${ACPX_EXIT_TIMEOUT})${detail ? `: ${detail}` : ""}`;
+}
+
+/**
  * A session-create timeout must be raised by name, before any generic handling.
  *
  * backpass kills the call itself, and acpx exits 130 on SIGTERM, so the result reaching
@@ -125,13 +151,16 @@ export const SESSION_CREATE_TIMEOUT_MS = 180_000;
  * in the `unsupported` branch and the run stops with "its acpx adapter does not support
  * sessions - upgrade acpx or omit the effort override": three claims that are all false
  * for a harness whose adapter simply had not started yet, and advice that cannot help.
- * `result.timedOut` is the only signal that separates the two, so it is checked first.
+ * `endedAtTimeout` distinguishes this from missing session support; see
+ * `ACPX_EXIT_TIMEOUT` for acpx's own timeout signal.
  */
-function sessionCreateTimeoutError({ agent, acpxAgentArgs, timeoutMs }) {
+function sessionCreateTimeoutError({ agent, acpxAgentArgs, timeoutMs, result }) {
   const seconds = Math.round(timeoutMs / 1000);
   return new UserError(
-    `acpx ${agent} did not create a session within ${seconds}s`,
-    `its ACP adapter did not finish starting; adapter initialization or a cold or stalled npm package fetch can block session creation - check with: acpx --verbose ${acpxAgentArgs.join(" ")} sessions new --name backpass-probe`,
+    timeoutMessage(result, agent, "session create", `acpx ${agent} did not create a session within ${seconds}s`),
+    result.timedOut
+      ? `its ACP adapter did not finish starting; adapter initialization or a cold or stalled npm package fetch can block session creation - check with: acpx --verbose ${acpxAgentArgs.join(" ")} sessions new --name backpass-probe`
+      : `check with: acpx --verbose ${acpxAgentArgs.join(" ")} sessions new --name backpass-probe`,
   );
 }
 
@@ -270,9 +299,10 @@ const BLANK_AT_BUDGET_FLOOR = 0.9;
  * `--timeout` budget as the acpx timeout kill it is - by timeout, not `empty-output`.
  *
  * backpass enforces the model budget with an outer kill of its own at budget + 30s
- * (`result.timedOut`), but acpx enforces `--timeout` first: when the harness dies at
- * the budget, `--format quiet` has the process exit clean with blank output, and the
- * outer kill never fires. Read generically that blank result reaches
+ * (`result.timedOut`), but acpx enforces `--timeout` first. Older acpx versions can
+ * exit clean with blank output when the harness dies at the budget, so the outer kill
+ * never fires. Explicit timeout exits are handled separately by `endedAtTimeout`.
+ * Read generically that blank result reaches
  * `assertNonEmptyOutput` as a silent provider failure - an `empty-output` verdict
  * whose hints point at exhausted credits - misreporting a timeout as a provider
  * problem. Wall clock is the only remaining signal: a blank result that spent (almost)
@@ -441,10 +471,10 @@ export async function probeSession({
     cwd,
   });
   if (created.spawnError?.code === "ENOENT") throw notFoundError(created);
-  if (created.timedOut) {
+  if (endedAtTimeout(created)) {
     return {
       verdict: "timeout",
-      detail: `probe timed out after ${Math.round(createTimeoutMs / 1000)}s`,
+      detail: timeoutMessage(created, agent, "probe", `probe timed out after ${Math.round(createTimeoutMs / 1000)}s`),
       availableModels: [],
     };
   }
@@ -517,8 +547,11 @@ export async function execOneShot({
     const execStartedAt = Date.now();
     const result = await run(args, { timeoutMs: (timeoutSeconds + 30) * 1000, cwd, env: invocation.env });
     if (result.spawnError && result.spawnError.code === "ENOENT") throw notFoundError(result);
-    if (result.timedOut) {
-      throw new AcpxError(`acpx ${agent} exec timed out after ${timeoutSeconds}s`, result);
+    if (endedAtTimeout(result)) {
+      throw new AcpxError(
+        timeoutMessage(result, agent, "exec", `acpx ${agent} exec timed out after ${timeoutSeconds}s`),
+        { ...result, timedOut: true },
+      );
     }
     if (result.code !== 0) {
       throw new AcpxError(
@@ -563,8 +596,8 @@ export async function execOneShot({
  *
  * Resolves to the handle, or throws an `AcpxError` (`unsupported: true` when the adapter
  * has no session support; `sessionPrompt` only falls back when it can preserve the requested overlays).
- * A `sessions new` that backpass itself killed on timeout is raised by name first
- * (`SESSION_CREATE_TIMEOUT_MS`), never as missing session support.
+ * Session-create timeouts are raised as `UserError` by `sessionCreateTimeoutError`,
+ * never as missing session support.
  *
  * @returns {Promise<{ notes: string[],
  *   prompt: (options: { promptFile: string, timeoutSeconds?: number, promptRetries?: number,
@@ -611,9 +644,9 @@ export async function openSession({
     invocation.dispose();
     throw notFoundError(created);
   }
-  if (created.timedOut) {
+  if (endedAtTimeout(created)) {
     invocation.dispose();
-    throw sessionCreateTimeoutError({ agent, acpxAgentArgs, timeoutMs: createTimeoutMs });
+    throw sessionCreateTimeoutError({ agent, acpxAgentArgs, timeoutMs: createTimeoutMs, result: created });
   }
   if (created.code !== 0) {
     invocation.dispose();
@@ -655,11 +688,12 @@ export async function openSession({
       if (setMode.code !== 0) {
         // Same degradation as session create: backpass kills the call, acpx exits 130 with
         // no stderr, and `exit 130` would read as the harness rejecting the mode.
-        const detail = setMode.timedOut ? "timed out" : firstLine(setMode.stderr) || `exit ${setMode.code}`;
+        const timedOut = endedAtTimeout(setMode);
+        const detail = timedOut ? "timed out" : firstLine(setMode.stderr) || `exit ${setMode.code}`;
         if (invocation.sessionModeRequired) {
           throw new AcpxError(
             `acpx ${agent} could not enable write session mode=${invocation.sessionMode}: ${detail}`,
-            setMode,
+            { ...setMode, timedOut },
           );
         }
         notes.push(
@@ -672,8 +706,12 @@ export async function openSession({
       if (set.code !== 0) {
         // Same degradation as session create: a killed call exits 130 with no stderr, and
         // `exit 130` would read as the adapter refusing the effort key.
-        const detail = set.timedOut ? "timed out" : firstLine(set.stderr) || `exit ${set.code}`;
-        throw new AcpxError(`acpx ${agent} could not apply invocation-scoped effort=${effort}: ${detail}`, set);
+        const timedOut = endedAtTimeout(set);
+        const detail = timedOut ? "timed out" : firstLine(set.stderr) || `exit ${set.code}`;
+        throw new AcpxError(`acpx ${agent} could not apply invocation-scoped effort=${effort}: ${detail}`, {
+          ...set,
+          timedOut,
+        });
       }
     }
   } catch (err) {
@@ -707,7 +745,17 @@ export async function openSession({
       promptFile,
     ];
     const result = await run(args, { timeoutMs: (timeoutSeconds + 30) * 1000, cwd, env: invocation.env });
-    if (result.timedOut) throw new AcpxError(`acpx ${agent} session prompt timed out after ${timeoutSeconds}s`, result);
+    if (endedAtTimeout(result)) {
+      throw new AcpxError(
+        timeoutMessage(
+          result,
+          agent,
+          "session prompt",
+          `acpx ${agent} session prompt timed out after ${timeoutSeconds}s`,
+        ),
+        { ...result, timedOut: true },
+      );
+    }
     if (result.code !== 0) {
       throw new AcpxError(
         `acpx ${agent} session prompt failed (exit ${result.code}): ${firstLine(result.stderr) || `exit ${result.code}`}`,

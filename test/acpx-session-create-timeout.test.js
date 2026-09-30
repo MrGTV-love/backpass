@@ -39,6 +39,10 @@ if (argv.includes("config") && argv.includes("show")) {
 const creating = argv.includes("sessions") && argv.includes("new");
 const status = argv.includes("status");
 const closing = argv.includes("sessions") && argv.includes("close");
+if (creating && process.env.FAKE_ACPX_MODE === "timeout-exit") {
+  process.stderr.write(process.env.FAKE_ACPX_STDERR || "");
+  process.exit(3);
+}
 if (creating && process.env.FAKE_ACPX_MODE === "no-sessions") {
   process.stderr.write("error: unknown command 'sessions'\\n");
   process.exit(2);
@@ -102,6 +106,47 @@ test("a stalled harness no longer claims the effort override is unsupported", as
     },
   );
 });
+
+for (const [scenario, stderr, detail] of [
+  ["empty stderr", "", ""],
+  ["accounting only", "[acpx] tokens: input=0 output=0 total=0\n", ""],
+  ["adapter error", "\nadapter startup timed out\nextra detail\n", ": adapter startup timed out"],
+  [
+    "quiet-mode error after accounting",
+    "[acpx] tokens: input=0 output=0 total=0\n[acpx] error: TIMEOUT GEMINI_ACP_STARTUP_TIMEOUT adapter startup timed out\n",
+    ": [acpx] error: TIMEOUT GEMINI_ACP_STARTUP_TIMEOUT adapter startup timed out",
+  ],
+  [
+    "noise before adapter error",
+    "[acpx] tokens: input=0 output=0 total=0\n[acpx] session closed\nadapter startup timed out\nextra detail\n",
+    ": adapter startup timed out",
+  ],
+]) {
+  test(`acpx timeout exit identifies session creation and probing without noise: ${scenario}`, async () => {
+    process.env.FAKE_ACPX_MODE = "timeout-exit";
+    process.env.FAKE_ACPX_STDERR = stderr;
+    try {
+      const options = { agent: "codex", sessionName: "backpass-create-timeout-exit", cwd: fixtureDir };
+      const message = `acpx codex session create ended at its own timeout (exit 3)${detail}`;
+      const named = (err) => {
+        assert.ok(err instanceof UserError, String(err));
+        assert.equal(err.message, message);
+        assert.equal(err.hint, "check with: acpx --verbose codex sessions new --name backpass-probe");
+        return true;
+      };
+      await assert.rejects(() => openSession(options), named);
+      await assert.rejects(() => sessionPrompt({ ...options, effort: "medium", promptFile }), named);
+      assert.deepEqual(await probeSession(options), {
+        verdict: "timeout",
+        detail: `acpx codex probe ended at its own timeout (exit 3)${detail}`,
+        availableModels: [],
+      });
+    } finally {
+      process.env.FAKE_ACPX_MODE = "hang";
+      delete process.env.FAKE_ACPX_STDERR;
+    }
+  });
+}
 
 test("an adapter that really rejects sessions still reports missing session support", async () => {
   process.env.FAKE_ACPX_MODE = "no-sessions";

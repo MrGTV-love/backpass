@@ -68,8 +68,8 @@ Each owning file's comments and tests hold the detail; read them before touching
   about, never silently ignored or double-written.
 - **Spawns**: a Windows shim refusal (`ERR_WINDOWS_SHIM_UNSAFE_ARG`, `src/subprocess.js`) must be raised by name
   before any generic result handling at every spawn boundary. All model calls go through `src/acpx.js`
-  (acpx is alpha); only session creation gets the cold-start timeout, and `result.timedOut` is handled before
-  generic exits.
+  (acpx is alpha); only session creation gets the cold-start timeout, and a timeout (`result.timedOut`, or acpx's
+  own exit 3, `ACPX_EXIT_TIMEOUT`) is handled before generic exits.
 - **Model and effort overrides are invocation-scoped** (`src/harness-invoke.js`): never ACP `set model` or Pi
   `set thought_level`, never edit-then-restore harness defaults.
 - **Agent auto-pick is probe-then-verify** (`src/agents.js`, `AgentResolver.withFallthrough`); a timeout or bare
