@@ -68,9 +68,15 @@ test("remote OMP subagents keep their parent's corroboration identity", async ()
   for (const key of piEnv) delete process.env[key];
   let result;
   try {
-    result = await withRemoteEnv({ localHome: s.localHome, hosts: s.hosts }, () =>
+    const disabled = await withRemoteEnv({ localHome: s.localHome, hosts: s.hosts }, () =>
       discoverProject(s.repoRoot, {
         discovery: { hosts: ["mac-home"], harnesses: ["pi"], since: "all" },
+      }),
+    );
+    assert.deepEqual(disabled.transcripts, [], "the remote OMP store is opt-in too");
+    result = await withRemoteEnv({ localHome: s.localHome, hosts: s.hosts }, () =>
+      discoverProject(s.repoRoot, {
+        discovery: { hosts: ["mac-home"], harnesses: ["pi"], since: "all", includeOmp: true },
       }),
     );
   } finally {

@@ -17,7 +17,8 @@ import {
 /**
  * Pi writes standalone sessions under
  * `~/.pi/agent/sessions/<escaped-cwd>/<ISO-ts>_<uuid>.jsonl`. omp (Oh My Pi) uses the
- * same JSONL shape under `~/.omp/agent/sessions/` and honors `PI_CODING_AGENT_DIR`, but
+ * same JSONL shape under `~/.omp/agent/sessions/` (opt-in via `discovery.includeOmp`)
+ * and honors `PI_CODING_AGENT_DIR`, but
  * prepends a fixed-width `{type:"title"}` record, so the `{type:"session", cwd, id}`
  * entry is line 2 there. omp also writes subagent transcripts one level deeper, at
  * `<escaped-cwd>/<session-id>/<Name>.jsonl`, and their own subagents at
@@ -56,12 +57,14 @@ function realpathOrResolve(value) {
   }
 }
 
-function storeSpecs() {
+function storeSpecs(config) {
   const specs = [
     { path: storeRoot(), direct: false, nested: true },
-    { path: home(".omp", "agent", "sessions"), direct: false, nested: true },
     { path: home(".bb", "pi-bridge-sessions"), direct: true, nested: false },
   ];
+  if (config?.discovery?.includeOmp === true) {
+    specs.push({ path: home(".omp", "agent", "sessions"), direct: false, nested: true });
+  }
   const piAgentDir = expandEnvPath(process.env.PI_CODING_AGENT_DIR);
   if (piAgentDir) specs.push({ path: path.join(piAgentDir, "sessions"), direct: false, nested: true });
   const piSessionDir = expandEnvPath(process.env.PI_CODING_AGENT_SESSION_DIR);
@@ -85,14 +88,16 @@ function storeSpecs() {
   return [...unique.values()];
 }
 
-export function storeRoots() {
-  return storeSpecs().map((spec) => spec.path);
+/** @param {{ discovery?: { includeOmp?: boolean } }} [config] */
+export function storeRoots(config) {
+  return storeSpecs(config).map((spec) => spec.path);
 }
 
-export function enumerate() {
+/** @param {{ config?: { discovery?: { includeOmp?: boolean } }, cutoffMs?: number | null, repo?: object }} [options] */
+export function enumerate({ config } = {}) {
   const out = [];
   const seen = new Set();
-  for (const spec of storeSpecs()) {
+  for (const spec of storeSpecs(config)) {
     const files = [
       ...(spec.direct ? listFiles(spec.path, ".jsonl") : []),
       ...(spec.nested ? listDirs(spec.path).flatMap((dir) => sessionFiles(dir, SUBAGENT_DEPTH)) : []),

@@ -334,6 +334,10 @@ test("OMP analysis persists parent observer identity and fold restores it for le
 
   writeOmpTranscript(path.join(sessionRoot, `${parentName}.jsonl`), "parent-native");
   writeOmpTranscript(path.join(sessionRoot, parentName, "Subagent.jsonl"), "child-native");
+  const disabled = runAnalyze(dir, home);
+  assert.equal(disabled.status, 0, disabled.output);
+  assert.equal(JSON.parse(disabled.stdout).transcripts, 0, "the default CLI run does not read OMP sessions");
+  fs.writeFileSync(path.join(dir, ".backpassrc.json"), JSON.stringify({ discovery: { includeOmp: true } }));
 
   const analyzed = runAnalyze(dir, home);
   assert.equal(analyzed.status, 0, analyzed.output);
@@ -345,7 +349,7 @@ test("OMP analysis persists parent observer identity and fold restores it for le
   process.env.USERPROFILE = home;
   try {
     const repo = resolveRepo(dir);
-    const config = loadConfig(dir, { discovery: { harnesses: ["pi"], since: "all" } });
+    const config = loadConfig(dir, { discovery: { harnesses: ["pi"], since: "all", includeOmp: true } });
     const state = new State(dir).ensure();
     config.state = state;
     const ctx = { repo, config, scope: null, strict: false, limit: null };

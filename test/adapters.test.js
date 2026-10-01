@@ -360,9 +360,26 @@ test("pi adapter enumerates standalone and BB-managed session roots without dupl
   });
 
   withPiStoreEnv({ homeDir: fakeHome, piAgentDir, piSessionDir, bbDataDir, bridgeDir }, () => {
+    for (const config of [undefined, { discovery: { includeOmp: false } }]) {
+      assert.deepEqual(
+        pi
+          .enumerate({ config })
+          .map((candidate) => path.basename(candidate.path))
+          .sort(),
+        [
+          "custom-agent.jsonl",
+          "custom-data.jsonl",
+          "custom-session.jsonl",
+          "default-bb.jsonl",
+          "direct-override.jsonl",
+          "standalone.jsonl",
+        ].sort(),
+        "OMP's default store is not read unless explicitly enabled",
+      );
+    }
     assert.deepEqual(
       pi
-        .enumerate()
+        .enumerate({ config: { discovery: { includeOmp: true } } })
         .map((candidate) => path.basename(candidate.path))
         .sort(),
       [

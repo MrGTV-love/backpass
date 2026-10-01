@@ -154,6 +154,7 @@ export async function discoverTranscripts({
       hosts,
       harnesses: selected.filter((h) => getAdapter(h)),
       cutoffMs,
+      includeOmp: config.discovery.includeOmp,
       controlPath: createControlPath(),
     });
     remoteMasters.push(...collected.map((result) => result.master).filter(Boolean));

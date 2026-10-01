@@ -104,7 +104,7 @@ async function descriptorFrom(adapter, row, id) {
   };
 }
 
-async function discoverHarness(adapter, { cutoffMs }) {
+async function discoverHarness(adapter, { cutoffMs, includeOmp }) {
   const stats = { scanned: 0, classified: 0, self: 0, error: null };
   const out = [];
   const warnings = [];
@@ -127,7 +127,7 @@ async function discoverHarness(adapter, { cutoffMs }) {
     return { stats, descriptors: out, warnings };
   }
 
-  const candidates = adapter.enumerate({ cutoffMs });
+  const candidates = adapter.enumerate({ cutoffMs, config: { discovery: { includeOmp } } });
   const scanContext = adapter.createScanContext?.();
   for (const candidate of candidates) {
     if (cutoffMs && candidate.mtimeMs < cutoffMs) continue;
@@ -162,8 +162,8 @@ async function discoverHarness(adapter, { cutoffMs }) {
   return { stats, descriptors: out, warnings };
 }
 
-/** @param {{ harnesses?: string[], cutoffMs?: number | null }} request */
-export async function discover({ harnesses = [], cutoffMs = null } = {}) {
+/** @param {{ harnesses?: string[], cutoffMs?: number | null, includeOmp?: boolean }} request */
+export async function discover({ harnesses = [], cutoffMs = null, includeOmp = false } = {}) {
   const harnessStats = Object.create(null);
   const descriptors = [];
   const warnings = [];
@@ -181,7 +181,7 @@ export async function discover({ harnesses = [], cutoffMs = null } = {}) {
       continue;
     }
     try {
-      const result = await discoverHarness(adapter, { cutoffMs });
+      const result = await discoverHarness(adapter, { cutoffMs, includeOmp });
       harnessStats[harness] = result.stats;
       descriptors.push(...result.descriptors);
       warnings.push(...result.warnings);

@@ -805,10 +805,10 @@ test("OMP subagents share their parent identity and refresh cached relations", a
   const prevHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all" } });
+    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all", includeOmp: true } });
     config.state = new State(repo).ensure();
     const cache = config.state.readScanCache();
-    for (const candidate of pi.enumerate()) {
+    for (const candidate of pi.enumerate({ config })) {
       const descriptor = pi.classify(candidate);
       delete descriptor.parentSessionId;
       delete descriptor.parentSessionPath;
@@ -839,6 +839,9 @@ test("OMP subagents share their parent identity and refresh cached relations", a
       second.transcripts.find((transcript) => transcript.nativeId === "child-native").corroborationIdentity,
       parent.identity,
     );
+    config.discovery.includeOmp = false;
+    const disabled = await discoverTranscripts({ repo: repository, config });
+    assert.deepEqual(disabled.transcripts, [], "opting out must not replay cached OMP descriptors");
   } finally {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
@@ -861,7 +864,7 @@ test("Pi child cache is invalidated when its parent session appears", async () =
   const prevHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all" } });
+    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all", includeOmp: true } });
     config.state = new State(repo).ensure();
     const repository = { name: "demo", root: repo, worktrees: [repo], remotes: [] };
 
@@ -910,7 +913,7 @@ test("nested OMP subagents share the root identity once the root session appears
   const prevHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all" } });
+    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all", includeOmp: true } });
     config.state = new State(repo).ensure();
     config.gapLedgerMaxAge = "all";
     const repository = { name: "demo", root: repo, worktrees: [repo], remotes: [] };
@@ -997,7 +1000,7 @@ test("OMP subagents running in another repo cwd still share the root identity", 
   const prevHome = process.env.HOME;
   process.env.HOME = home;
   try {
-    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all" } });
+    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all", includeOmp: true } });
     config.state = new State(repo).ensure();
     const repository = { name: "demo", root: repo, worktrees: [repo], remotes: [] };
     const result = await discoverTranscripts({ repo: repository, config });
