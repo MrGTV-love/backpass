@@ -105,14 +105,16 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
   pruneGapLedger(ledger, { memoryFile, memoryPath: memoryFile.path, skills, maxAge: gapLedgerMaxAge });
   state.writeGapLedger(ledger);
 
-  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills).map((observation) => ({
-    ...observation,
-    sessionId: resolveGapObservationObserver(observation, selectedObserversByNative) ?? observation.sessionId,
-  })).filter((observation) => {
-    if (!selectedGapSessions.has(observation.sessionId)) return false;
-    const observers = selectedObserversByNative.get(observation.sourceSessionId);
-    return !observers || (observers.size === 1 && observers.has(observation.sessionId));
-  });
+  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills)
+    .map((observation) => ({
+      ...observation,
+      sessionId: resolveGapObservationObserver(observation, selectedObserversByNative) ?? observation.sessionId,
+    }))
+    .filter((observation) => {
+      if (!selectedGapSessions.has(observation.sessionId)) return false;
+      const observers = selectedObserversByNative.get(observation.sourceSessionId);
+      return !observers || (observers.size === 1 && observers.has(observation.sessionId));
+    });
   const summary = foldEvidence(relevant, {
     minGapEvidence,
     minGapProjects: ctx.scope?.kind === "user" ? ctx.config.minGapProjects || 1 : 0,

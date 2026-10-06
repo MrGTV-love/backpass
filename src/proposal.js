@@ -653,7 +653,7 @@ export function buildProposal(rawResult, context) {
       });
       const owner = rootOwnsGap(sightings, routing.rootOwnedGaps ?? summary?.rootOwnedGaps)
         ? routing.rootPath
-        : (completeAttribution ? routing.ownerOf(sessions) : null) ?? routing.rootPath;
+        : ((completeAttribution ? routing.ownerOf(sessions) : null) ?? routing.rootPath);
       const here = routing.weight ?? routing.rootPath;
       if (owner !== here) {
         violations.push(

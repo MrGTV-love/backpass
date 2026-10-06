@@ -428,8 +428,9 @@ consolidation call sees the full open gap set and merges entries that describe t
 mistake. That second judgment is what lets two sightings of a brand-new gap in the same
 run's parallel fan-out corroborate. A failed consolidation call degrades the run to
 lexical identity and says so; it never aborts. All sightings cluster before their domain
-is decided. Each sighting votes `project` or `orchestration`; only a majority-orchestration
-cluster is excluded from synthesis, while a tie stays eligible. Mixed clusters are always
+is decided. Each corroborating observer contributes one `project` or `orchestration` vote;
+related sightings share a vote, with any project sighting making it project. Only a
+majority-orchestration cluster is excluded from synthesis, while a tie stays eligible. Mixed clusters are always
 reported with their orchestration count, even below the evidence floor. A corroborated
 majority-excluded cluster, including a pure-orchestration cluster, remains clearly labeled
 as a report-only diagnostic rather than becoming an instruction in the project's memory

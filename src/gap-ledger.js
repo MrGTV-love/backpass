@@ -35,14 +35,15 @@ import { corroborationIdentityOf } from "./transcript.js";
  *    afterward (majority orchestration withholds a cluster from proposals; a mixed
  *    cluster stays visible). A missing domain counts as project, so evidence from
  *    before the field existed keeps its old behavior.
- *  - Sessions are keyed by corroboration identity (`corroborationIdentityOf`: the root
- *    session's canonical identity for an OMP subagent, the transcript's own otherwise), so
- *    re-analyzing or re-sampling the same source session, or a subagent of it, overwrites
- *    its observation and never adds a count. An older per-file identity key migrates to
- *    it; a legacy id key migrates only when the fold proved that id belongs to one
- *    evidence identity (`legacyIds`). Persisted observations only contribute when that
- *    identity belongs to the current selected sample, so sessions outside the window or
- *    cap cannot skew fold.
+ *  - Observations normally use corroboration identity (`corroborationIdentityOf`: the
+ *    linked root session's identity for an OMP descendant, the transcript's own otherwise).
+ *    Older per-file keys migrate only when selected native provenance and any occupied
+ *    destination are compatible; legacy id keys additionally require unambiguous
+ *    `legacyIds`. Incompatible history stays separately keyed, and recording uses a
+ *    native or source-qualified key rather than overwriting it. Storage keys do not
+ *    grant extra observer votes. Persisted observations only contribute when their
+ *    admitted observer belongs to the current selected sample, so sessions outside the
+ *    window or cap cannot skew fold.
  *  - A gap is a fact about its session: re-analysis that no longer mentions it is model
  *    noise, not the session changing, so observations are only ever replaced, not removed
  *    by absence. They retire in exactly two ways: the memory surface gains content
@@ -213,18 +214,17 @@ function destinationAcceptsObservation(observation, sessionIdentity, transcript,
   if (resolveGapObservationObserver(observation, observersByNative) === sessionIdentity) return true;
   const nativeIdentity = transcript.identity || transcript.id;
   return (
-    observation.unattributedSightings &&
-    (observation.sourceSessionId === nativeIdentity || observation.sightingIds?.includes(nativeIdentity)) &&
-    observersByNative.get(nativeIdentity)?.size === 1
-  ) || (
-    !observation.sourceSessionId &&
-    transcript.harness !== "pi" &&
-    !transcript.parentSessionId &&
-    nativeIdentity === sessionIdentity &&
-    (observation.sightingIds || []).every((native) => {
-      const observers = observersByNative.get(native);
-      return observers?.size === 1 && observers.has(sessionIdentity);
-    })
+    (observation.unattributedSightings &&
+      (observation.sourceSessionId === nativeIdentity || observation.sightingIds?.includes(nativeIdentity)) &&
+      observersByNative.get(nativeIdentity)?.size === 1) ||
+    (!observation.sourceSessionId &&
+      transcript.harness !== "pi" &&
+      !transcript.parentSessionId &&
+      nativeIdentity === sessionIdentity &&
+      (observation.sightingIds || []).every((native) => {
+        const observers = observersByNative.get(native);
+        return observers?.size === 1 && observers.has(sessionIdentity);
+      }))
   );
 }
 
@@ -276,9 +276,8 @@ function sightingQuotesOf(observation) {
 }
 
 /**
- * Fold this run's evidence into the ledger. One observation per (gap, session); a
- * session seen again replaces its own observation and keeps its first-seen timestamp.
- * A legacy `transcript.id` key is that session's only when it is in `legacyIds`.
+ * Record this run's sightings under the identity and provenance rules above, retaining
+ * the first-seen timestamp when replacing compatible history.
  *
  * @param {{ now?: Date, skills?: unknown[], legacyIds?: Set<string>, transcripts?: object[] }} [options]
  */
@@ -326,14 +325,24 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
       }
       let destinationIdentity = sessionIdentity;
       let sourceQualified = false;
-      if (!destinationAcceptsObservation(
-        entry.sessions[destinationIdentity], sessionIdentity, transcript, observersByNative,
-      )) {
+      if (
+        !destinationAcceptsObservation(
+          entry.sessions[destinationIdentity],
+          sessionIdentity,
+          transcript,
+          observersByNative,
+        )
+      ) {
         destinationIdentity = transcript.identity || transcript.id;
       }
-      if (!destinationAcceptsObservation(
-        entry.sessions[destinationIdentity], sessionIdentity, transcript, observersByNative,
-      )) {
+      if (
+        !destinationAcceptsObservation(
+          entry.sessions[destinationIdentity],
+          sessionIdentity,
+          transcript,
+          observersByNative,
+        )
+      ) {
         destinationIdentity = JSON.stringify([sessionIdentity, transcript.identity || transcript.id]);
         sourceQualified = true;
       }
@@ -341,7 +350,9 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
         entry,
         sessionIdentity,
         (sourceQualified ? [] : sessionIdentityAliases(transcript, sessionIdentity, legacyIds)).filter(
-          (identity) => identity !== destinationIdentity && !entry.sessions[identity]?.sourceSessionId &&
+          (identity) =>
+            identity !== destinationIdentity &&
+            !entry.sessions[identity]?.sourceSessionId &&
             (entry.sessions[identity]?.sightingIds || []).every((native) => {
               const observers = observersByNative.get(native);
               return observers?.size === 1 && observers.has(sessionIdentity);
@@ -403,10 +414,8 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
   return recorded;
 }
 /**
- * Re-key selected sessions in old ledgers when related transcript files now share an
- * identity. A legacy `transcript.id` key migrates only when it is in `legacyIds`: the ids
- * the fold proved belong to exactly one evidence identity, so an ambiguous id never moves
- * another session's sighting onto a selected one.
+ * Re-key selected observations in old ledgers under the identity and provenance rules
+ * above; native analysis identities remain separate from corroborating observers.
  */
 export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = new Set() } = {}) {
   const selections = [];
@@ -426,20 +435,26 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
   for (const entry of Object.values(ledger.entries)) {
     for (const { transcript, sessionIdentity, aliases: nativeAliases, ordinaryNative } of selections) {
       const destination = entry.sessions[sessionIdentity];
-      if (destination && !resolvesTo(destination, sessionIdentity) && !(
-        ordinaryNative && !destination.sourceSessionId &&
-        (destination.sightingIds || []).every((native) => {
-          const observers = observersByNative.get(native);
-          return observers?.size === 1 && observers.has(sessionIdentity);
-        })
-      )) continue;
+      if (
+        destination &&
+        !resolvesTo(destination, sessionIdentity) &&
+        !(
+          ordinaryNative &&
+          !destination.sourceSessionId &&
+          (destination.sightingIds || []).every((native) => {
+            const observers = observersByNative.get(native);
+            return observers?.size === 1 && observers.has(sessionIdentity);
+          })
+        )
+      )
+        continue;
       const aliases = nativeAliases.filter((identity) => {
         const prior = entry.sessions[identity];
         return !prior?.sourceSessionId
           ? (prior?.sightingIds || []).every((native) => {
-            const observers = observersByNative.get(native);
-            return observers?.size === 1 && observers.has(sessionIdentity);
-          })
+              const observers = observersByNative.get(native);
+              return observers?.size === 1 && observers.has(sessionIdentity);
+            })
           : resolvesTo(prior, sessionIdentity);
       });
       for (const [identity, prior] of Object.entries(entry.sessions)) {
@@ -448,14 +463,13 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
           prior.sourceSessionId === (transcript.identity || transcript.id) &&
           resolvesTo(prior, sessionIdentity) &&
           !aliases.includes(identity)
-        ) aliases.push(identity);
+        )
+          aliases.push(identity);
       }
       const observation = entry.sessions[sessionIdentity];
       if (ordinaryNative && observation && !observation.sourceSessionId) {
         observation.sourceSessionId = transcript.identity || transcript.id;
-        observation.sightingIds = [
-          ...new Set([...(observation.sightingIds || []), observation.sourceSessionId]),
-        ];
+        observation.sightingIds = [...new Set([...(observation.sightingIds || []), observation.sourceSessionId])];
         delete observation.unattributedSightings;
       }
       if (!aliases.some((identity) => entry.sessions[identity])) continue;

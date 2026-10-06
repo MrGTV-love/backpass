@@ -42,9 +42,8 @@ export function getAdapter(harness) {
  * results are memoised in `.backpass/scan-cache.json` keyed by path + mtime + size. An
  * adapter may also export `cacheVersion` (bumped when its classification semantics
  * change) and `cacheDependency` (a fingerprint of other files a descriptor reads, such
- * as OMP ancestor sessions); a mismatch in either reclassifies the entry. Re-scans are
- * then O(new files) - which matters: codex alone had 10,317 rollouts on the machine this
- * was designed against.
+ * as OMP ancestor sessions); a mismatch in either reclassifies the entry. Unchanged
+ * entries avoid reclassification, but dependency fingerprints are checked per candidate.
  *
  * SQLite-backed stores (opencode, hermes, cursor IDE) query session metadata directly,
  * so they skip the file-header cache entirely.
@@ -281,14 +280,14 @@ function dropCrossHostDuplicates(transcripts) {
       if (
         (transcript.parentSessionId ||
           (transcript.harness === "pi" && transcript.interactionSignals.source === "subagent")) &&
-        (previous.parentSessionId ||
-          (previous.harness === "pi" && previous.interactionSignals.source === "subagent"))
+        (previous.parentSessionId || (previous.harness === "pi" && previous.interactionSignals.source === "subagent"))
       ) {
         aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
         const observerKey = `${transcript.harness}\n${transcript.corroborationNativeId}`;
         const retainedObserverKey = `${previous.harness}\n${previous.corroborationNativeId}`;
         if (!observerCorrespondences.has(observerKey)) observerCorrespondences.set(observerKey, previous);
-        if (!observerCorrespondences.has(retainedObserverKey)) observerCorrespondences.set(retainedObserverKey, previous);
+        if (!observerCorrespondences.has(retainedObserverKey))
+          observerCorrespondences.set(retainedObserverKey, previous);
       }
       continue;
     }
@@ -304,7 +303,9 @@ function dropCrossHostDuplicates(transcripts) {
     if (
       !previous ||
       (!observerCorrespondences.has(key) &&
-        previous.host === (transcript.host || null) && !previous.parentSessionId && transcript.parentSessionId)
+        previous.host === (transcript.host || null) &&
+        !previous.parentSessionId &&
+        transcript.parentSessionId)
     ) {
       observers.set(key, transcript);
     }

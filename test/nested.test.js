@@ -588,7 +588,6 @@ test("an unknown native observer beside an API child keeps both the fold and pro
     route: rootRoute,
   });
   assert.equal(rootSummary.gaps[0].sessions, 2);
-  assert.equal(rootSummary.sourceSessions[observations[1].source], undefined);
   for (const weight of [null, API.path]) {
     const route = { ...rootRoute, weight, rootOwnedGaps: rootSummary.rootOwnedGaps };
     const summary = foldEvidence([], { minGapEvidence: 2, gapObservations: observations, route });

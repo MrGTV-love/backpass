@@ -287,7 +287,10 @@ export function foldEvidence(
     ? gapClusters.map((cluster, index) =>
         allDecided[index].failedTriggerSkill
           ? null
-          : gapOwnerOf(cluster.items.filter((item) => !item.projectCovered), route),
+          : gapOwnerOf(
+              cluster.items.filter((item) => !item.projectCovered),
+              route,
+            ),
       )
     : null;
   const routedGaps = [];
@@ -374,9 +377,7 @@ export function foldEvidence(
       summary.rootOwnedGaps = gapClusters
         .filter((cluster, index) => owners[index] === null && cluster.sessions.size >= minGapEvidence)
         .map((cluster) =>
-          cluster.items.flatMap((item) =>
-            item.sightingQuotes.map((quote) => ({ sessionId: item.sessionId, quote })),
-          ),
+          cluster.items.flatMap((item) => item.sightingQuotes.map((quote) => ({ sessionId: item.sessionId, quote }))),
         );
     }
     summary.routedGaps = routedGaps;
@@ -455,9 +456,7 @@ export function clusterGapObservations(observations, { checkProjectCoverage = fa
       quote: obs.quote,
       sightingQuotes: [
         ...new Set(
-          [obs.quote, ...(obs.sightingQuotes || [])].filter(
-            (quote) => typeof quote === "string" && quote.length > 0,
-          ),
+          [obs.quote, ...(obs.sightingQuotes || [])].filter((quote) => typeof quote === "string" && quote.length > 0),
         ),
       ],
       recurrenceRisk: obs.recurrenceRisk,
@@ -586,10 +585,6 @@ function gapOwnerOf(items, route) {
   return route.ownerOf(items.flatMap((item) => item.sightingIds));
 }
 
-/**
- * Cluster domain is a majority of per-sighting votes, not a pre-filter. Ties (including
- * 1 of 2) stay project so one inconsistent analysis call cannot kill a real recurrence.
- */
 function representativeGapItems(items, route) {
   const selected = items.slice(0, 6);
   if (!route || items.length <= 6) return selected;
@@ -602,6 +597,11 @@ function representativeGapItems(items, route) {
   return selected;
 }
 
+/**
+ * Cluster domain is a majority of observer votes, not a pre-filter. Related sightings
+ * share a vote with project precedence; ties stay project so one inconsistent analysis
+ * call cannot kill a real recurrence.
+ */
 function clusterDomainVote(items) {
   const orchestrationSightings = items.filter((item) => item.domain === "orchestration").length;
   const sightings = items.length;
