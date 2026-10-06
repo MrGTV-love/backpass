@@ -367,7 +367,7 @@ export function foldEvidence(
     summary.routedGaps = routedGaps;
     summary.sourceSessions = sourceIdentitiesOf(issuedSources, [
       ...usable.map((record) => [record.transcript.identity || record.transcript.id]),
-      ...persistedObservations.map((observation) => observation?.sightingIds || []),
+      ...persistedObservations.map((observation) => [observation?.sourceSessionId || observation?.sessionId]),
     ]);
     for (const [index, observation] of persistedObservations.entries()) {
       if (observation?.unattributedSightings) {

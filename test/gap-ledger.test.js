@@ -115,6 +115,183 @@ test("persisted selected gap sources remain fold-issued without fresh evidence",
   }
 });
 
+test("selected native provenance migrates durable observers without a fresh matching gap", async () => {
+  for (const [oldObserver, currentObserver] of [
+    ["child-observer", "ancestor-observer"],
+    ["old-host:observer", "canonical-host:observer"],
+  ]) {
+    for (const reanalyzed of [false, true]) {
+      const h = harness({ gapLedgerMaxAge: "all" });
+      const native = (id, observer, gaps, memoryHash) => {
+        const evidence = record(id, gaps, { memoryHash });
+        evidence.transcript = {
+          ...evidence.transcript, harness: "pi", nativeId: id,
+          corroborationIdentity: observer,
+        };
+        evidence.key = evidenceKey(evidence.transcript, memoryHash);
+        return evidence;
+      };
+      const old = native("G", oldObserver, [{ proposedInstruction: GAP, domain: "orchestration" }], "h1");
+      await run(h, [old]);
+      const entryId = gapEntryId(MEMORY_PATH, GAP);
+      const before = h.state.readGapLedger().entries[entryId].sessions[oldObserver];
+      const current = native("G", currentObserver, [], "h2");
+      const independent = native("X", "independent-observer", [GAP_REPHRASED], "h2");
+      if (reanalyzed) h.state.writeEvidence(current.transcript.id, current);
+      h.state.writeEvidence(independent.transcript.id, independent);
+      const summary = await foldForRun(h.ctx, memoryFile(), "h2", [], [
+        current.transcript, independent.transcript,
+      ]);
+      assert.equal(summary.analyzedSessions, reanalyzed ? 2 : 1);
+      assert.equal(summary.gaps.length, 1);
+      assert.equal(summary.gaps[0].sessions, 2);
+      assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), [
+        "quote from G", "quote from X",
+      ]);
+      const sessions = h.state.readGapLedger().entries[entryId].sessions;
+      assert.equal(sessions[oldObserver], undefined);
+      assert.equal(sessions[currentObserver].firstObservedAt, before.firstObservedAt);
+      assert.equal(sessions[currentObserver].observedAt, before.observedAt);
+      assert.equal(sessions[currentObserver].memoryHash, "h1");
+      assert.equal(sessions[currentObserver].sourceSessionId, "G");
+      assert.deepEqual(sessions[currentObserver].sightingIds, ["G"]);
+      assert.equal(sessions[currentObserver].domain, "orchestration");
+    }
+  }
+});
+
+test("observer migration requires complete selected unambiguous native provenance", () => {
+  const selected = (identity, observer) => ({
+    id: `pi-${identity}`, identity, harness: "pi", corroborationIdentity: observer,
+  });
+  const cases = [
+    { name: "convergent", transcripts: [selected("G", "R"), selected("H", "R")], move: true },
+    { name: "unselected sighting", transcripts: [selected("G", "R")], move: false },
+    { name: "unselected representative", transcripts: [selected("H", "R")], move: false },
+    { name: "divergent", transcripts: [selected("G", "R"), selected("H", "S")], move: false },
+    {
+      name: "ambiguous native",
+      transcripts: [selected("G", "R"), selected("G", "S"), selected("H", "R")], move: false,
+    },
+    {
+      name: "unattributed", transcripts: [selected("G", "R"), selected("H", "R")],
+      move: false, unattributedSightings: true,
+    },
+  ];
+  for (const scenario of cases) {
+    for (const oldKey of ["C", "G"]) {
+      const entryId = gapEntryId(MEMORY_PATH, GAP);
+      const observation = {
+        firstObservedAt: "2026-08-01T00:00:00Z", observedAt: "2026-08-03T00:00:00Z",
+        source: "pi · G · 2026-08-01", sourceSessionId: "G",
+        sightingIds: ["H"], quote: "representative quote",
+        sightingQuotes: ["other native quote"], domain: "project",
+        ...(scenario.unattributedSightings ? { unattributedSightings: true } : {}),
+      };
+      const ledger = { version: 1, entries: {
+        [entryId]: { id: entryId, memoryPath: MEMORY_PATH, proposedInstruction: GAP,
+          sessions: { [oldKey]: structuredClone(observation) } },
+      } };
+      normalizeGapLedgerSessions(ledger, scenario.transcripts);
+      const observations = ledgerGapObservations(ledger, MEMORY_PATH);
+      assert.equal(observations.length, 1, scenario.name);
+      assert.equal(observations[0].sessionId, scenario.move ? "R" : oldKey, scenario.name);
+      const summary = foldEvidence([], {
+        minGapEvidence: 1,
+        gapObservations: observations.filter((observation) => observation.sessionId === "R"),
+      });
+      assert.equal(summary.gaps.length, scenario.move ? 1 : 0, scenario.name);
+      if (!scenario.move) assert.deepEqual(ledger.entries[entryId].sessions[oldKey], observation);
+      else {
+        assert.equal(observations[0].sourceSessionId, "G");
+        assert.deepEqual(observations[0].sightingIds, ["H"]);
+        assert.deepEqual(observations[0].sightingQuotes, ["representative quote", "other native quote"]);
+      }
+    }
+  }
+});
+
+test("foldForRun leaves ambiguous and incompletely selected old observers outside corroboration", async () => {
+  const native = (identity, observer) => ({
+    id: identity, identity, harness: "pi", corroborationIdentity: observer,
+    startedAt: Date.parse("2026-08-01T00:00:00Z"), interaction: "interactive",
+  });
+  const scenarios = [
+    { selected: [native("G", "R")], sightingIds: ["G", "H"] },
+    { selected: [native("G", "R"), native("H", "S")], sightingIds: ["G", "H"] },
+    { selected: [native("G", "R"), native("G", "S")], sightingIds: ["G"] },
+    { selected: [native("G", "R")], sightingIds: ["G"], unattributedSightings: true },
+  ];
+  for (const scenario of scenarios) {
+    const h = harness({ gapLedgerMaxAge: "all" });
+    const entryId = gapEntryId(MEMORY_PATH, GAP);
+    const old = {
+      observedAt: "2026-08-01T00:00:00Z", source: "pi · G · 2026-08-01",
+      sourceSessionId: "G", sightingIds: scenario.sightingIds, quote: "old G quote",
+      ...(scenario.unattributedSightings ? { unattributedSightings: true } : {}),
+    };
+    h.state.writeGapLedger({ version: 1, entries: {
+      [entryId]: { id: entryId, memoryPath: MEMORY_PATH, proposedInstruction: GAP, sessions: { C: old } },
+    } });
+    const independent = record("X", [GAP], { memoryHash: "h2" });
+    h.state.writeEvidence(independent.transcript.id, independent);
+    const summary = await foldForRun(h.ctx, memoryFile(), "h2", [], [
+      ...scenario.selected, independent.transcript,
+    ]);
+    assert.equal(summary.analyzedSessions, 1);
+    assert.deepEqual(summary.gaps, []);
+    assert.deepEqual(h.state.readGapLedger().entries[entryId].sessions.C, old);
+    assert.equal(h.state.readGapLedger().entries[entryId].sessions.R, undefined);
+  }
+});
+
+test("fresh matching evidence cannot bypass rejected attributed alias migration", async () => {
+  for (const destination of [null, "other-observer"]) {
+    const h = harness({ gapLedgerMaxAge: "all" });
+    const entryId = gapEntryId(MEMORY_PATH, GAP);
+    const old = {
+      observedAt: "2026-08-01T00:00:00Z", source: "old native source",
+      sourceSessionId: "G", sightingIds: ["G", "H"], quote: "old mixed quote",
+    };
+    h.state.writeGapLedger({ version: 1, entries: {
+      [entryId]: { id: entryId, memoryPath: MEMORY_PATH, proposedInstruction: GAP, sessions: { G: old } },
+    } });
+    const fresh = record("G", [GAP], { memoryHash: "h2" });
+    fresh.transcript = { ...fresh.transcript, harness: "pi", corroborationIdentity: "R" };
+    fresh.key = evidenceKey(fresh.transcript, "h2");
+    h.state.writeEvidence(fresh.transcript.id, fresh);
+    const selected = [fresh.transcript];
+    if (destination) selected.push({
+      id: "H", identity: "H", harness: "pi", corroborationIdentity: destination,
+    });
+    const summary = await foldForRun(h.ctx, memoryFile(), "h2", [], selected);
+    assert.equal(summary.analyzedSessions, 1);
+    assert.deepEqual(summary.gaps, []);
+    assert.equal(summary.totals.gapSightings, 1);
+    const sessions = h.state.readGapLedger().entries[entryId].sessions;
+    assert.deepEqual(sessions.G, old);
+    assert.equal(sessions.R.sourceSessionId, "G");
+    assert.deepEqual(sessions.R.sightingIds, ["G"]);
+    assert.deepEqual(sessions.R.sightingQuotes, ["quote from G"]);
+  }
+});
+
+test("direct recording still migrates provenance-free legacy aliases", () => {
+  const entryId = gapEntryId(MEMORY_PATH, GAP);
+  const ledger = { version: 1, entries: {
+    [entryId]: { id: entryId, memoryPath: MEMORY_PATH, proposedInstruction: GAP,
+      sessions: { legacy: { observedAt: "2026-08-01T00:00:00Z", quote: "legacy quote" } } },
+  } };
+  const fresh = record("legacy", [GAP]);
+  fresh.transcript.identity = "current-native";
+  recordGapObservations(ledger, [fresh], { legacyIds: new Set(["legacy"]) });
+  assert.equal(ledger.entries[entryId].sessions.legacy, undefined);
+  const observation = ledgerGapObservations(ledger, MEMORY_PATH)[0];
+  assert.equal(observation.sessionId, "current-native");
+  assert.equal(observation.sourceSessionId, "current-native");
+  assert.deepEqual(new Set(observation.sightingQuotes), new Set(["legacy quote", "quote from legacy"]));
+});
+
 test("the same session is never double-counted across runs", async () => {
   const h = harness();
   await run(h, [record("claude-s1", [GAP])]);
@@ -364,7 +541,7 @@ test("native sightings union across recording, migration and consolidation with 
   const summary = foldEvidence([], { minGapEvidence: 2, gapObservations: observations, route });
   assert.equal(summary.gaps.length, 1);
   assert.equal(summary.gaps[0].sessions, 2);
-  assert.deepEqual(summary.sourceSessions[shared.source].sort(), ["child-api", "child-web"]);
+  assert.equal(summary.sourceSessions[shared.source], "child-api");
   assert.equal(summary.sourceObservers[shared.source], "observer-a");
   assert.equal(foldEvidence([], {
     minGapEvidence: 2, gapObservations: observations, route: { ...route, weight: api.path },

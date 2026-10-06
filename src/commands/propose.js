@@ -48,13 +48,12 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
     if (!identitiesByLegacyId.has(legacyId)) identitiesByLegacyId.set(legacyId, new Set());
     identitiesByLegacyId.get(legacyId).add(transcriptIdentity(record.transcript));
   }
-  const selectedGapSessions = new Set(selectedByIdentity.keys());
+  const selectedGapSessions = new Set();
   const legacyIds = new Set();
   for (const transcript of transcripts) {
     selectedGapSessions.add(corroborationIdentityOf(transcript));
     const identities = identitiesByLegacyId.get(transcript.id);
     if (identities?.size === 1 && identities.has(transcriptIdentity(transcript))) {
-      selectedGapSessions.add(transcript.id);
       legacyIds.add(transcript.id);
     }
   }

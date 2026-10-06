@@ -282,6 +282,19 @@ function dropCrossHostDuplicates(transcripts) {
     write += 1;
   }
   transcripts.length = write;
+  const observers = new Map();
+  for (const transcript of transcripts) {
+    const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
+    const previous = observers.get(key);
+    if (!previous) observers.set(key, transcript);
+    else if (previous.host !== (transcript.host || null)) {
+      const observer = transcript.corroborationIdentity;
+      const retainedObserver = canonicalObserver(previous.corroborationIdentity);
+      if (observer !== retainedObserver && !observerAliases.has(observer)) {
+        observerAliases.set(observer, retainedObserver);
+      }
+    }
+  }
   for (const transcript of transcripts) {
     transcript.corroborationIdentity = canonicalObserver(transcript.corroborationIdentity);
   }

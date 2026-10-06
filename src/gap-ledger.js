@@ -270,7 +270,9 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
       const prior = takePriorObservations(
         entry,
         sessionIdentity,
-        sessionIdentityAliases(transcript, sessionIdentity, legacyIds),
+        sessionIdentityAliases(transcript, sessionIdentity, legacyIds).filter(
+          (identity) => !entry.sessions[identity]?.sourceSessionId,
+        ),
         transcript,
       );
       const { priors, firstObservedAt } = prior;
@@ -333,6 +335,7 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
  */
 export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = new Set() } = {}) {
   const selections = [];
+  const observersByNative = new Map();
   for (const transcript of transcripts) {
     if (!(transcript?.corroborationIdentity || transcript?.identity || transcript?.id)) continue;
     const sessionIdentity = corroborationIdentityOf(transcript);
@@ -340,11 +343,39 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
     const nativeIdentity = transcript.identity || transcript.id;
     const ordinaryNative =
       transcript.harness !== "pi" && !transcript.parentSessionId && sessionIdentity === nativeIdentity;
-    if (aliases.length || ordinaryNative) selections.push({ transcript, sessionIdentity, aliases, ordinaryNative });
+    const nativeAliases = [
+      nativeIdentity,
+      ...(legacyIds.has(transcript.id) ? [transcript.id] : []),
+    ];
+    for (const identity of nativeAliases) {
+      if (!observersByNative.has(identity)) observersByNative.set(identity, new Set());
+      observersByNative.get(identity).add(sessionIdentity);
+    }
+    selections.push({ transcript, sessionIdentity, aliases, ordinaryNative });
   }
 
+  const resolvesTo = (observation, sessionIdentity) => {
+    if (hasUnattributedSightings(observation)) return false;
+    const natives = new Set([observation.sourceSessionId, ...(observation.sightingIds || [])]);
+    return [...natives].every((native) => {
+      const observers = observersByNative.get(native);
+      return observers?.size === 1 && observers.has(sessionIdentity);
+    });
+  };
   for (const entry of Object.values(ledger.entries)) {
-    for (const { transcript, sessionIdentity, aliases, ordinaryNative } of selections) {
+    for (const { transcript, sessionIdentity, aliases: nativeAliases, ordinaryNative } of selections) {
+      const aliases = nativeAliases.filter((identity) => {
+        const prior = entry.sessions[identity];
+        return !prior?.sourceSessionId || resolvesTo(prior, sessionIdentity);
+      });
+      for (const [identity, prior] of Object.entries(entry.sessions)) {
+        if (
+          identity !== sessionIdentity &&
+          prior.sourceSessionId === (transcript.identity || transcript.id) &&
+          resolvesTo(prior, sessionIdentity) &&
+          !aliases.includes(identity)
+        ) aliases.push(identity);
+      }
       const observation = entry.sessions[sessionIdentity];
       if (ordinaryNative && observation && !observation.sourceSessionId) {
         observation.sourceSessionId = transcript.identity || transcript.id;
