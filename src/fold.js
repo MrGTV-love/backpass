@@ -104,7 +104,16 @@ export function foldEvidence(
   // without the project requirement, so a project-scoped run still has an allowlist.
   const sources = new Set();
   const sourceProjects = {};
-  const persistedObservations = gapObservations ?? [];
+  const observersByNative = new Map();
+  for (const record of usable) {
+    const nativeIdentity = record.transcript.identity || record.transcript.id;
+    if (!observersByNative.has(nativeIdentity)) observersByNative.set(nativeIdentity, new Set());
+    observersByNative.get(nativeIdentity).add(corroborationIdentityOf(record.transcript));
+  }
+  const persistedObservations = (gapObservations ?? []).filter((observation) => {
+    const observers = observersByNative.get(observation?.sourceSessionId);
+    return !observers || (observers.size === 1 && observers.has(observation?.sessionId));
+  });
   const issuedSources = disambiguateSourceLabels([
     ...usable.map((record) => ({
       source: gapSource(record.transcript),

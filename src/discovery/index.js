@@ -263,6 +263,12 @@ function dropCrossHostDuplicates(transcripts) {
     while (observerAliases.has(identity)) identity = observerAliases.get(identity);
     return identity;
   };
+  const aliasObserver = (observer, retainedObserver) => {
+    const retained = canonicalObserver(retainedObserver);
+    if (observer !== retained && !observerAliases.has(observer)) {
+      observerAliases.set(observer, retained);
+    }
+  };
   let write = 0;
   for (const transcript of transcripts) {
     const key = `${transcript.harness}\n${transcript.nativeId}`;
@@ -270,15 +276,13 @@ function dropCrossHostDuplicates(transcripts) {
     if (previous && previous.host !== (transcript.host || null)) {
       const host = transcript.host || "local";
       drops.set(host, (drops.get(host) || 0) + 1);
-      const droppedObserver = transcript.corroborationIdentity;
-      const retainedObserver = previous.corroborationIdentity;
       if (
-        transcript.parentSessionId &&
-        previous.parentSessionId &&
-        droppedObserver !== retainedObserver &&
-        !observerAliases.has(droppedObserver)
+        (transcript.parentSessionId ||
+          (transcript.harness === "pi" && transcript.interactionSignals.source === "subagent")) &&
+        (previous.parentSessionId ||
+          (previous.harness === "pi" && previous.interactionSignals.source === "subagent"))
       ) {
-        observerAliases.set(droppedObserver, retainedObserver);
+        aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
       }
       continue;
     }
@@ -302,11 +306,7 @@ function dropCrossHostDuplicates(transcripts) {
     const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
     const previous = observers.get(key);
     if (previous.host !== (transcript.host || null)) {
-      const observer = transcript.corroborationIdentity;
-      const retainedObserver = previous.corroborationIdentity;
-      if (observer !== retainedObserver && !observerAliases.has(observer)) {
-        observerAliases.set(observer, retainedObserver);
-      }
+      aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
     }
   }
   for (const transcript of transcripts) {

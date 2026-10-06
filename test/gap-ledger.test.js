@@ -17,6 +17,8 @@ import {
   normalizeGapLedgerSessions,
 } from "../src/gap-ledger.js";
 import { routingFor, workedPaths } from "../src/nested.js";
+import { buildProposal } from "../src/proposal.js";
+import { makeRepo, stageAndMeasure, writeIn } from "./helpers/staging.js";
 
 const MEMORY_PATH = "AGENTS.md";
 const DAY = 86_400_000;
@@ -243,6 +245,106 @@ test("foldForRun leaves ambiguous and incompletely selected old observers outsid
     assert.deepEqual(h.state.readGapLedger().entries[entryId].sessions.C, old);
     assert.equal(h.state.readGapLedger().entries[entryId].sessions.R, undefined);
   }
+});
+
+test("a selected representative cannot grant its former selected observer to one quote", async () => {
+  const native = (id, observer, gaps, memoryHash) => {
+    const evidence = record(id, gaps, { memoryHash });
+    evidence.transcript = {
+      ...evidence.transcript, harness: "pi", nativeId: id, corroborationIdentity: observer,
+    };
+    evidence.key = evidenceKey(evidence.transcript, memoryHash);
+    return evidence;
+  };
+  for (const parentFresh of [false, true]) {
+    for (const matchingGap of [false, true]) {
+      const h = harness({ gapLedgerMaxAge: "all" });
+      const ledger = { version: 1, entries: {} };
+      recordGapObservations(ledger, [
+        native("P", "P", [GAP], "h1"),
+        native("G", "P", [GAP], "h1"),
+      ]);
+      const entryId = gapEntryId(MEMORY_PATH, GAP);
+      const historical = structuredClone(ledger.entries[entryId].sessions.P);
+      assert.equal(historical.sourceSessionId, "G");
+      assert.deepEqual(historical.sightingIds, ["P", "G"]);
+      h.state.writeGapLedger(ledger);
+
+      const parent = native("P", "P", [], parentFresh ? "h2" : "h1");
+      const representative = native("G", "L", matchingGap ? [GAP] : [], "h2");
+      representative.negative = [{
+        instruction: "AG-001", quote: "G skipped the database documentation", class: "non-compliance",
+      }];
+      const independent = native("X", "X", [GAP], "h2");
+      for (const evidence of [parent, representative, independent]) {
+        h.state.writeEvidence(evidence.transcript.id, evidence);
+      }
+      const route = { weight: null, rootPath: MEMORY_PATH, ownerOf: () => null };
+      const summary = await foldForRun(h.ctx, memoryFile(), "h2", [], [
+        parent.transcript, representative.transcript, independent.transcript,
+      ], { route });
+
+      assert.equal(summary.analyzedSessions, parentFresh ? 3 : 2);
+      assert.equal(summary.totals.gapSightings, matchingGap ? 2 : 1);
+      assert.equal(summary.gaps.length, matchingGap ? 1 : 0);
+      if (matchingGap) {
+        assert.equal(summary.gaps[0].sessions, 2);
+        assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), [
+          "quote from G", "quote from X",
+        ]);
+      }
+      const quote = summary.instructions.find((row) => row.instruction === "AG-001").quotes[0];
+      assert.equal(summary.sourceObservers[quote.source], "L");
+      assert.equal(summary.sourceSessions[quote.source], "G");
+      assert.ok(!summary.rootOwnedGaps.flat().some((item) => item.sessionId === "P"));
+      assert.deepEqual(h.state.readGapLedger().entries[entryId].sessions.P, historical);
+
+      const repo = makeRepo({ [MEMORY_PATH]: "# T\n\n- Run pnpm test before pushing.\n- Keep the README current.\n" });
+      const staged = stageAndMeasure({
+        repo, edit: (root) => writeIn(root, MEMORY_PATH, (text) => `${text}- ${GAP}\n`),
+      });
+      const built = buildProposal({
+        edits: [{
+          changes: staged.measured.changes.map((change) => change.id),
+          kind: "add", title: "Read the database documentation", rationale: "Avoid re-deriving query behavior",
+          evidence: [{ polarity: "negative", text: quote.text, source: quote.source }],
+        }],
+      }, {
+        repo, memoryFile: staged.memoryFile, measured: staged.measured, summary,
+        config: { ...h.ctx.config, budgetTokens: 5000, maxEditsPerRun: 5, skillsDir: ".agents/skills" },
+      });
+      assert.equal(built.proposal.edits.length, 0);
+      assert.ok(built.violations.some((violation) => /backed by 1 session\(s\); 2 are required/.test(violation)));
+    }
+  }
+});
+
+test("selected historical sightings remain admitted when their representative is not selected", async () => {
+  const h = harness({ gapLedgerMaxAge: "all" });
+  const entryId = gapEntryId(MEMORY_PATH, GAP);
+  const historical = {
+    observedAt: "2026-08-01T00:00:00Z", source: "pi · G · 2026-08-01",
+    sourceSessionId: "G", sightingIds: ["P", "G"], quote: "historical G quote",
+    sightingQuotes: ["historical P quote", "historical G quote"],
+  };
+  h.state.writeGapLedger({ version: 1, entries: {
+    [entryId]: { id: entryId, memoryPath: MEMORY_PATH, proposedInstruction: GAP, sessions: { P: historical } },
+  } });
+  const parent = record("P", [], { memoryHash: "h2" });
+  parent.transcript = { ...parent.transcript, harness: "pi", corroborationIdentity: "P" };
+  parent.key = evidenceKey(parent.transcript, "h2");
+  const independent = record("X", [GAP], { memoryHash: "h2" });
+  for (const evidence of [parent, independent]) h.state.writeEvidence(evidence.transcript.id, evidence);
+  const route = { weight: null, rootPath: MEMORY_PATH, ownerOf: () => null };
+  const summary = await foldForRun(h.ctx, memoryFile(), "h2", [], [
+    parent.transcript, independent.transcript,
+  ], { route });
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.equal(summary.sourceObservers[historical.source], "P");
+  assert.equal(summary.sourceSessions[historical.source], "G");
+  assert.deepEqual(new Set(summary.rootOwnedGaps.flat().filter((item) => item.sessionId === "P").map((item) => item.quote)),
+    new Set(historical.sightingQuotes));
+  assert.deepEqual(h.state.readGapLedger().entries[entryId].sessions.P, historical);
 });
 
 test("fresh matching evidence cannot bypass rejected attributed alias migration", async () => {

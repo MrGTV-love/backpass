@@ -145,6 +145,69 @@ test("current records and legacy gap observations share one label per session", 
   assert.deepEqual(new Set(Object.values(summary.sourceProjects)), new Set(["repo-a", "repo-b"]));
 });
 
+test("direct fold rejects a selected representative's inconsistent historical observer before clustering", () => {
+  const gap = "Read database documentation before writing queries.";
+  const current = (id, observer) => record(id, {
+    transcript: {
+      id, identity: id, nativeId: id, harness: "pi", corroborationIdentity: observer,
+      startedAt: Date.parse("2026-08-01T00:00:00Z"),
+    },
+    negative: [{ instruction: "AG-001", quote: `current mistake ${id}`, class: "non-compliance" }],
+  });
+  const historical = {
+    proposedInstruction: gap, sessionId: "P", sourceSessionId: "G", sightingIds: ["P", "G"],
+    source: "pi · G · 2026-08-01", quote: "historical G quote",
+    sightingQuotes: ["historical P quote", "historical G quote"],
+  };
+  const independent = {
+    proposedInstruction: gap, sessionId: "X", sourceSessionId: "X", sightingIds: ["X"],
+    source: "pi · X · 2026-08-01", quote: "independent X quote",
+  };
+  const route = { weight: null, rootPath: "AGENTS.md", ownerOf: () => null };
+  for (const matchingGap of [false, true]) {
+    const fresh = {
+      proposedInstruction: gap, sessionId: "L", sourceSessionId: "G", sightingIds: ["G"],
+      source: historical.source, quote: "fresh G quote",
+    };
+    const summary = foldEvidence([current("P", "P"), current("G", "L"), current("X", "X")], {
+      minGapEvidence: 2, memoryFile, route,
+      gapObservations: [historical, independent, ...(matchingGap ? [fresh] : [])],
+    });
+    assert.equal(summary.sourceObservers[historical.source], "L");
+    assert.equal(summary.sourceSessions[historical.source], "G");
+    assert.equal(summary.totals.gapSightings, matchingGap ? 2 : 1);
+    assert.equal(summary.gaps.length, matchingGap ? 1 : 0);
+    if (matchingGap) {
+      assert.equal(summary.gaps[0].sessions, 2);
+      assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), [
+        "fresh G quote", "independent X quote",
+      ]);
+    }
+    assert.ok(!summary.rootOwnedGaps.flat().some((item) => item.sessionId === "P"));
+  }
+  const ambiguous = foldEvidence([current("G", "L"), current("G", "M")], {
+    gapObservations: [{ ...historical, sessionId: "L" }, independent], minGapEvidence: 2,
+  });
+  assert.equal(ambiguous.totals.gapSightings, 1);
+  assert.deepEqual(ambiguous.gaps, []);
+
+  for (const representativeSelected of [false, true]) {
+    const summary = foldEvidence([
+      current("P", "P"), current("X", "X"), ...(representativeSelected ? [current("G", "L")] : []),
+    ], {
+      gapObservations: [{ ...historical, sessionId: representativeSelected ? "L" : "P" }, independent],
+      minGapEvidence: 2, route: {
+        ...route, ownerOf: (ids) => ids.includes("P") ? null : "apps/api/AGENTS.md",
+      },
+    });
+    assert.equal(summary.gaps[0].sessions, 2);
+    assert.equal(summary.sourceObservers[historical.source], representativeSelected ? "L" : "P");
+    assert.equal(summary.sourceSessions[historical.source], "G");
+    assert.deepEqual(new Set(summary.rootOwnedGaps.flat().map((item) => item.quote)),
+      new Set([...historical.sightingQuotes, independent.quote]));
+  }
+});
+
 test("instructions with no evidence still appear - they are the removal candidates", () => {
   const summary = foldEvidence([record("s1", { positive: [{ instruction: "AG-001", quote: "q" }] })], { memoryFile });
 

@@ -49,9 +49,13 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
     identitiesByLegacyId.get(legacyId).add(transcriptIdentity(record.transcript));
   }
   const selectedGapSessions = new Set();
+  const selectedObserversByNative = new Map();
   const legacyIds = new Set();
   for (const transcript of transcripts) {
     selectedGapSessions.add(corroborationIdentityOf(transcript));
+    const nativeIdentity = transcript.identity || transcript.id;
+    if (!selectedObserversByNative.has(nativeIdentity)) selectedObserversByNative.set(nativeIdentity, new Set());
+    selectedObserversByNative.get(nativeIdentity).add(corroborationIdentityOf(transcript));
     const identities = identitiesByLegacyId.get(transcript.id);
     if (identities?.size === 1 && identities.has(transcriptIdentity(transcript))) {
       legacyIds.add(transcript.id);
@@ -98,9 +102,11 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
   pruneGapLedger(ledger, { memoryFile, memoryPath: memoryFile.path, skills, maxAge: gapLedgerMaxAge });
   state.writeGapLedger(ledger);
 
-  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills).filter((observation) =>
-    selectedGapSessions.has(observation.sessionId),
-  );
+  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills).filter((observation) => {
+    if (!selectedGapSessions.has(observation.sessionId)) return false;
+    const observers = selectedObserversByNative.get(observation.sourceSessionId);
+    return !observers || (observers.size === 1 && observers.has(observation.sessionId));
+  });
   const summary = foldEvidence(relevant, {
     minGapEvidence,
     minGapProjects: ctx.scope?.kind === "user" ? ctx.config.minGapProjects || 1 : 0,
