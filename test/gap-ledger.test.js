@@ -14,7 +14,9 @@ import {
   mergeGapEntries,
   pruneGapLedger,
   recordGapObservations,
+  normalizeGapLedgerSessions,
 } from "../src/gap-ledger.js";
+import { routingFor, workedPaths } from "../src/nested.js";
 
 const MEMORY_PATH = "AGENTS.md";
 const DAY = 86_400_000;
@@ -242,6 +244,218 @@ test("a selected OMP child collapses legacy parent and child ledger sightings", 
   assert.equal(summary.gaps.length, 0, "old parent and child keys still represent one observer");
   assert.equal(summary.totals.droppedGapSingletons, 1);
   assert.deepEqual(Object.keys(Object.values(h.state.readGapLedger().entries)[0].sessions), [parentIdentity]);
+  assert.deepEqual(
+    Object.values(h.state.readGapLedger().entries)[0].sessions[parentIdentity].sightingQuotes.sort(),
+    ["quote from pi-child", "quote from pi-parent"],
+  );
+});
+
+test("native aliases migrate while root-only observations keep unknown provenance", async () => {
+  const h = harness({ gapLedgerMaxAge: "all" });
+  const children = [1, 2].map((index) => ({
+    id: `pi-child-${index}`,
+    identity: `native-child-${index}`,
+    nativeId: `child-${index}`,
+    harness: "pi",
+    startedAt: Date.parse("2026-08-02T00:00:00Z"),
+    corroborationIdentity: `root-${index}`,
+    corroborationNativeId: `parent-${index}`,
+    corroborationStartedAt: Date.parse("2026-08-01T00:00:00Z"),
+    interaction: "non-interactive",
+    cwd: h.root,
+  }));
+  const entryId = gapEntryId(MEMORY_PATH, GAP);
+  const legacy = { version: 1, entries: {
+    [entryId]: {
+      id: entryId,
+      memoryPath: MEMORY_PATH,
+      proposedInstruction: GAP,
+      sessions: Object.fromEntries(children.map((child) => [child.identity, {
+        observedAt: "2026-08-03T00:00:00Z",
+        source: "old native source",
+        quote: `quote ${child.nativeId}`,
+        domain: "project",
+      }])),
+    },
+  } };
+  h.state.writeGapLedger(legacy);
+  const api = { path: "apps/api/AGENTS.md", dir: "apps/api" };
+  const attribution = new Map(children.map((child) => [
+    child.identity,
+    workedPaths(child, [{ kind: "tool", input: { path: "apps/api/handler.ts" } }], [h.root]),
+  ]));
+  const route = routingFor([api], attribution, MEMORY_PATH, api.path);
+  const summary = await foldForRun(h.ctx, memoryFile(), "h1", [], children, { route });
+  assert.equal(summary.analyzedSessions, 0);
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.source), [
+    "pi · child-1 · 2026-08-02",
+    "pi · child-2 · 2026-08-02",
+  ]);
+  const migrated = h.state.readGapLedger();
+  for (const child of children) {
+    const observation = migrated.entries[entryId].sessions[child.corroborationIdentity];
+    assert.equal(observation.sourceSessionId, child.identity);
+    assert.deepEqual(observation.sightingIds, [child.identity]);
+  }
+
+  const rootOnly = { version: 1, entries: {
+    [entryId]: {
+      id: entryId,
+      memoryPath: MEMORY_PATH,
+      proposedInstruction: GAP,
+      sessions: Object.fromEntries(children.map((child) => [child.corroborationIdentity, {
+        observedAt: "2026-08-03T00:00:00Z",
+        source: `original source ${child.corroborationIdentity}`,
+        quote: "unknown native quote",
+        domain: "project",
+      }])),
+    },
+  } };
+  h.state.writeGapLedger(rootOnly);
+  const unknown = await foldForRun(h.ctx, memoryFile(), "h1", [], children, { route });
+  assert.deepEqual(unknown.gaps, [], "without native attribution the ledger cannot claim an API owner");
+  assert.equal(unknown.routedGaps[0].owner, MEMORY_PATH);
+  assert.deepEqual(unknown.sourceSessions, {});
+  assert.deepEqual(unknown.sources, ["original source root-1", "original source root-2"]);
+  assert.ok(Object.values(h.state.readGapLedger().entries[entryId].sessions)
+    .every((observation) => observation.sourceSessionId === undefined && observation.sightingIds === undefined));
+});
+
+test("native sightings union across recording, migration and consolidation with one root vote", () => {
+  const h = harness({ gapLedgerMaxAge: "all" });
+  const gapA = "Always verify the API schema before adding a handler.";
+  const gapB = "Check deployment permissions when releasing services.";
+  const native = (id, root, gap, relative) => {
+    const transcript = {
+      id: `pi-${id}`, identity: id, nativeId: id, harness: "pi",
+      corroborationIdentity: root, startedAt: Date.parse("2026-08-02T00:00:00Z"),
+      interaction: "non-interactive", cwd: h.root,
+    };
+    return {
+      ...record(id, [gap]),
+      transcript,
+      relative,
+    };
+  };
+  const records = [
+    native("child-api", "observer-a", gapA, "apps/api/a.ts"),
+    native("child-web", "observer-a", gapB, "apps/web/a.ts"),
+    native("independent-api", "observer-b", gapA, "apps/api/b.ts"),
+  ];
+  const ledger = { version: 1, entries: {} };
+  recordGapObservations(ledger, records);
+  const apiEntry = Object.values(ledger.entries).find((entry) => entry.proposedInstruction === gapA);
+  const webEntry = Object.values(ledger.entries).find((entry) => entry.proposedInstruction === gapB);
+  assert.equal(mergeGapEntries(ledger, [[apiEntry.id, webEntry.id]]), 1);
+  normalizeGapLedgerSessions(ledger, records.map((record) => record.transcript));
+  const observations = ledgerGapObservations(ledger, MEMORY_PATH);
+  const shared = observations.find((observation) => observation.sessionId === "observer-a");
+  assert.equal(shared.sourceSessionId, "child-api");
+  assert.deepEqual(shared.sightingIds.sort(), ["child-api", "child-web"]);
+  assert.equal(shared.source, "pi · child-api · 2026-08-02");
+  assert.deepEqual(shared.sightingQuotes.sort(), ["quote from child-api", "quote from child-web"]);
+  const attribution = new Map(records.map((record) => [
+    record.transcript.identity,
+    workedPaths(record.transcript, [{ kind: "tool", input: { path: record.relative } }], [h.root]),
+  ]));
+  const api = { path: "apps/api/AGENTS.md", dir: "apps/api" };
+  const route = routingFor([api], attribution, MEMORY_PATH, null);
+  const summary = foldEvidence([], { minGapEvidence: 2, gapObservations: observations, route });
+  assert.equal(summary.gaps.length, 1);
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.deepEqual(summary.sourceSessions[shared.source].sort(), ["child-api", "child-web"]);
+  assert.equal(summary.sourceObservers[shared.source], "observer-a");
+  assert.equal(foldEvidence([], {
+    minGapEvidence: 2, gapObservations: observations, route: { ...route, weight: api.path },
+  }).gaps.length, 0);
+
+  recordGapObservations(ledger, [records[1]]);
+  const replaced = ledgerGapObservations(ledger, MEMORY_PATH).find(
+    (observation) => observation.sessionId === "observer-a",
+  );
+  assert.equal(replaced.sourceSessionId, "child-web");
+  assert.deepEqual(replaced.sightingIds.sort(), ["child-api", "child-web"]);
+  assert.deepEqual(replaced.sightingQuotes.sort(), ["quote from child-api", "quote from child-web"]);
+});
+
+test("ordinary non-OMP selected legacy observations keep their native routing identity", async () => {
+  const h = harness({ gapLedgerMaxAge: "all" });
+  const selected = [record("ordinary-a", [GAP]), record("ordinary-b", [GAP])]
+    .map((record) => ({ ...record.transcript, cwd: h.root }));
+  const entryId = gapEntryId(MEMORY_PATH, GAP);
+  h.state.writeGapLedger({ version: 1, entries: {
+    [entryId]: {
+      id: entryId, memoryPath: MEMORY_PATH, proposedInstruction: GAP,
+      sessions: Object.fromEntries(selected.map((transcript) => [transcript.identity, {
+        observedAt: "2026-08-03T00:00:00Z",
+        source: `claude · ${transcript.id} · 2026-08-01`,
+        quote: `quote ${transcript.id}`,
+      }])),
+    },
+  } });
+  const api = { path: "apps/api/AGENTS.md", dir: "apps/api" };
+  const attribution = new Map(selected.map((transcript) => [
+    transcript.identity,
+    workedPaths(transcript, [{ kind: "tool", input: { path: "apps/api/handler.ts" } }], [h.root]),
+  ]));
+  const summary = await foldForRun(h.ctx, memoryFile(), "h1", [], selected, {
+    route: routingFor([api], attribution, MEMORY_PATH, api.path),
+  });
+  assert.equal(summary.gaps[0].sessions, 2);
+  for (const observation of ledgerGapObservations(h.state.readGapLedger(), MEMORY_PATH)) {
+    assert.equal(observation.sourceSessionId, observation.sessionId);
+    assert.deepEqual(observation.sightingIds, [observation.sessionId]);
+    assert.equal(summary.sourceSessions[observation.source], observation.sessionId);
+  }
+});
+
+test("absorbed unknown sightings stay root-owned through merge and overwrite", () => {
+  const h = harness({ gapLedgerMaxAge: "all" });
+  const child = {
+    id: "pi-child", identity: "native-api-child", nativeId: "child", harness: "pi",
+    corroborationIdentity: "observer-root", cwd: h.root,
+    startedAt: Date.parse("2026-08-02T00:00:00Z"), interaction: "non-interactive",
+  };
+  const api = { path: "apps/api/AGENTS.md", dir: "apps/api" };
+  const attribution = new Map([[child.identity, workedPaths(child, [
+    { kind: "tool", input: { path: "apps/api/handler.ts" } },
+  ], [h.root])]]);
+  for (const unknownFirst of [false, true]) {
+    const evidence = { ...record(child.id, [GAP]), transcript: child };
+    const ledger = { version: 1, entries: {} };
+    recordGapObservations(ledger, [evidence]);
+    const known = Object.values(ledger.entries)[0];
+    const unknownId = "f".repeat(16);
+    ledger.entries[unknownId] = {
+      id: unknownId, memoryPath: MEMORY_PATH, proposedInstruction: "Legacy phrasing.",
+      sessions: { "observer-root": {
+        source: "legacy observer source", quote: "unknown native quote",
+        observedAt: "2026-08-01T00:00:00Z",
+      } },
+    };
+    mergeGapEntries(ledger, [unknownFirst ? [unknownId, known.id] : [known.id, unknownId]]);
+    normalizeGapLedgerSessions(ledger, [child]);
+    recordGapObservations(ledger, [{
+      ...evidence,
+      gaps: [{ ...evidence.gaps[0], matchesGap: Object.keys(ledger.entries)[0] }],
+    }]);
+    const observations = ledgerGapObservations(ledger, MEMORY_PATH);
+    assert.equal(observations.length, 1);
+    assert.deepEqual(observations[0].sightingIds, [child.identity]);
+    assert.equal(observations[0].sourceSessionId, child.identity);
+    assert.equal(observations[0].unattributedSightings, true);
+    const root = foldEvidence([], {
+      gapObservations: observations, minGapEvidence: 1,
+      route: routingFor([api], attribution, MEMORY_PATH, null),
+    });
+    assert.equal(root.gaps.length, 1);
+    assert.equal(root.sourceSessions[observations[0].source], undefined);
+    assert.equal(foldEvidence([], {
+      gapObservations: observations, minGapEvidence: 1,
+      route: routingFor([api], attribution, MEMORY_PATH, api.path),
+    }).gaps.length, 0);
+  }
 });
 
 test("an OMP parent and subagent sharing a root vote project in one run whatever the order", () => {

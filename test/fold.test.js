@@ -554,7 +554,7 @@ test("OMP subagents share corroboration while relevance remains per file", () =>
     corroborationNativeId: "parent-native",
     corroborationStartedAt: startedAt,
     harness: "pi",
-    startedAt: startedAt + 1_000,
+    startedAt: startedAt + 86_400_000,
     interaction: "non-interactive",
   };
   const independent = {
@@ -582,7 +582,11 @@ test("OMP subagents share corroboration while relevance remains per file", () =>
   const oneObserver = new Map(parentAndChild.instructions.map((row) => [row.instruction, row]));
   assert.equal(parentAndChild.gaps.length, 0, "parent and subagent cannot clear the two-session floor");
   assert.equal(parentAndChild.totals.droppedGapSingletons, 1);
-  assert.equal(parentAndChild.sources.length, 1, "both files share one visible evidence source");
+  assert.deepEqual(parentAndChild.sources, [
+    "pi · parent-native · 2026-08-01",
+    "pi · child-native · 2026-08-02",
+  ]);
+  assert.deepEqual(Object.values(parentAndChild.sourceObservers), ["pi-parent-session", "pi-parent-session"]);
   assert.equal(oneObserver.get("AG-001").harmSessions, 1);
   assert.equal(oneObserver.get("AG-002").nonComplianceSessions, 1);
   assert.equal(oneObserver.get("AG-001").sessions, 2, "relevance still measures both analyzed files");
@@ -595,7 +599,7 @@ test("OMP subagents share corroboration while relevance remains per file", () =>
   const twoObservers = new Map(independentlyCorroborated.instructions.map((row) => [row.instruction, row]));
   assert.equal(independentlyCorroborated.gaps.length, 1);
   assert.equal(independentlyCorroborated.gaps[0].sessions, 2);
-  assert.equal(independentlyCorroborated.sources.length, 2);
+  assert.equal(independentlyCorroborated.sources.length, 3);
   assert.equal(twoObservers.get("AG-001").harmSessions, 2);
   assert.equal(twoObservers.get("AG-002").nonComplianceSessions, 2);
   assert.equal(twoObservers.get("AG-001").sessions, 3);

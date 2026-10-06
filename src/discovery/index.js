@@ -258,6 +258,11 @@ function remoteTranscripts(result, entry, { scope, repo, config, strict, identit
 function dropCrossHostDuplicates(transcripts) {
   const seen = new Map();
   const drops = new Map();
+  const observerAliases = new Map();
+  const canonicalObserver = (identity) => {
+    while (observerAliases.has(identity)) identity = observerAliases.get(identity);
+    return identity;
+  };
   let write = 0;
   for (const transcript of transcripts) {
     const key = `${transcript.harness}\n${transcript.nativeId}`;
@@ -265,13 +270,21 @@ function dropCrossHostDuplicates(transcripts) {
     if (previous && previous.host !== (transcript.host || null)) {
       const host = transcript.host || "local";
       drops.set(host, (drops.get(host) || 0) + 1);
+      const droppedObserver = transcript.corroborationIdentity;
+      const retainedObserver = canonicalObserver(previous.corroborationIdentity);
+      if (droppedObserver !== retainedObserver && !observerAliases.has(droppedObserver)) {
+        observerAliases.set(droppedObserver, retainedObserver);
+      }
       continue;
     }
-    if (!previous) seen.set(key, { host: transcript.host || null });
+    if (!previous) seen.set(key, transcript);
     transcripts[write] = transcript;
     write += 1;
   }
   transcripts.length = write;
+  for (const transcript of transcripts) {
+    transcript.corroborationIdentity = canonicalObserver(transcript.corroborationIdentity);
+  }
   return drops;
 }
 

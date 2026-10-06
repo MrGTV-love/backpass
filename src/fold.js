@@ -108,11 +108,11 @@ export function foldEvidence(
   const issuedSources = disambiguateSourceLabels([
     ...usable.map((record) => ({
       source: gapSource(record.transcript),
-      identity: corroborationIdentityOf(record.transcript),
+      identity: record.transcript.identity || record.transcript.id,
     })),
     ...persistedObservations.map((observation) => ({
       source: observation?.source,
-      identity: observation?.sessionId,
+      identity: observation?.sourceSessionId || observation?.sessionId,
     })),
   ]);
   const recordSources = issuedSources.slice(0, usable.length);
@@ -165,6 +165,8 @@ export function foldEvidence(
         recurrenceRisk: gap.recurrenceRisk,
         source,
         sessionId: corroborationIdentity,
+        sourceSessionId: sessionIdentity,
+        sightingIds: [sessionIdentity],
         domain: gap.domain === "orchestration" ? "orchestration" : "project",
         project: record.transcript.project || null,
         projectRoot: record.transcript.projectRoot || null,
@@ -268,7 +270,9 @@ export function foldEvidence(
 
   const owners = route
     ? gapClusters.map((cluster, index) =>
-        allDecided[index].failedTriggerSkill ? null : route.ownerOf([...cluster.sessions]),
+        allDecided[index].failedTriggerSkill
+          ? null
+          : gapOwnerOf(cluster.items.filter((item) => !item.projectCovered), route),
       )
     : null;
   const routedGaps = [];
@@ -340,6 +344,10 @@ export function foldEvidence(
     instructions: instructionRows,
     sources: [...sources],
     sourceProjects,
+    sourceObservers: sourceIdentitiesOf(issuedSources, [
+      ...usable.map((record) => [corroborationIdentityOf(record.transcript)]),
+      ...persistedObservations.map((observation) => [observation?.sessionId]),
+    ]),
     parentHarmSessions,
     gaps,
     crossSurfaceDuplicates: duplicates,
@@ -350,24 +358,34 @@ export function foldEvidence(
     if (route.weight === null) {
       summary.rootOwnedGaps = gapClusters
         .filter((cluster, index) => owners[index] === null && cluster.sessions.size >= minGapEvidence)
-        .map((cluster) => cluster.items.map((item) => ({ sessionId: item.sessionId, quote: item.quote })));
+        .map((cluster) =>
+          cluster.items.flatMap((item) =>
+            item.sightingQuotes.map((quote) => ({ sessionId: item.sessionId, quote })),
+          ),
+        );
     }
     summary.routedGaps = routedGaps;
-    summary.sourceSessions = sourceSessionsOf(issuedSources, usable, persistedObservations);
+    summary.sourceSessions = sourceIdentitiesOf(issuedSources, [
+      ...usable.map((record) => [record.transcript.identity || record.transcript.id]),
+      ...persistedObservations.map((observation) => observation?.sightingIds || []),
+    ]);
+    for (const [index, observation] of persistedObservations.entries()) {
+      if (observation?.unattributedSightings) {
+        delete summary.sourceSessions[normalizeSourceLabel(observationSources[index])];
+      }
+    }
   }
   return summary;
 }
 
-/** Which session each issued source label names, for the routing gate in `buildProposal`. */
-function sourceSessionsOf(issuedSources, usable, observations) {
-  const identities = [
-    ...usable.map((record) => record.transcript.identity || record.transcript.id),
-    ...observations.map((observation) => observation?.sessionId),
-  ];
+function sourceIdentitiesOf(issuedSources, identities) {
   const out = {};
   issuedSources.forEach((source, index) => {
     const label = normalizeSourceLabel(source);
-    if (label && identities[index] && !out[label]) out[label] = identities[index];
+    if (!label) return;
+    const prior = out[label] ? [out[label]].flat() : [];
+    const combined = [...new Set([...prior, ...identities[index]].filter(Boolean))];
+    if (combined.length) out[label] = combined.length === 1 ? combined[0] : combined;
   });
   return out;
 }
@@ -423,9 +441,18 @@ export function clusterGapObservations(observations, { checkProjectCoverage = fa
     const item = {
       mistake: obs.mistake,
       quote: obs.quote,
+      sightingQuotes: [
+        ...new Set(
+          [obs.quote, ...(obs.sightingQuotes || [])].filter(
+            (quote) => typeof quote === "string" && quote.length > 0,
+          ),
+        ),
+      ],
       recurrenceRisk: obs.recurrenceRisk,
       source: obs.source,
       sessionId: obs.sessionId,
+      sightingIds: [...new Set(obs.sightingIds || [])],
+      unattributedSightings: Boolean(obs.unattributedSightings || !obs.sightingIds?.length),
       domain: observationDomain(obs),
       project: obs.project || null,
       projectCovered,
@@ -439,6 +466,9 @@ export function clusterGapObservations(observations, { checkProjectCoverage = fa
         if (observationDomain(obs) !== "orchestration") sessionItem.domain = "project";
         if (projectCovered) sessionItem.projectCovered = true;
         for (const id of observationGapIds(obs)) sessionItem.gapIds.add(id);
+        sessionItem.sightingIds = [...new Set([...sessionItem.sightingIds, ...item.sightingIds])];
+        sessionItem.sightingQuotes = [...new Set([...sessionItem.sightingQuotes, ...item.sightingQuotes])];
+        sessionItem.unattributedSightings ||= item.unattributedSightings;
       } else {
         cluster.items.push(item);
       }
@@ -539,6 +569,11 @@ function observationDomain(obs) {
   return obs?.domain === "orchestration" ? "orchestration" : "project";
 }
 
+function gapOwnerOf(items, route) {
+  if (items.some((item) => item.unattributedSightings || !item.sightingIds.length)) return null;
+  return route.ownerOf(items.flatMap((item) => item.sightingIds));
+}
+
 /**
  * Cluster domain is a majority of per-sighting votes, not a pre-filter. Ties (including
  * 1 of 2) stay project so one inconsistent analysis call cannot kill a real recurrence.
@@ -546,11 +581,11 @@ function observationDomain(obs) {
 function representativeGapItems(items, route) {
   const selected = items.slice(0, 6);
   if (!route || items.length <= 6) return selected;
-  const owner = route.ownerOf(items.map((item) => item.sessionId));
-  if (route.ownerOf(selected.map((item) => item.sessionId)) === owner) return selected;
+  const owner = gapOwnerOf(items, route);
+  if (gapOwnerOf(selected, route) === owner) return selected;
   for (const item of items.slice(6)) {
     const candidate = [...selected.slice(0, -1), item];
-    if (route.ownerOf(candidate.map((entry) => entry.sessionId)) === owner) return candidate;
+    if (gapOwnerOf(candidate, route) === owner) return candidate;
   }
   return selected;
 }

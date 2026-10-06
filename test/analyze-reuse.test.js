@@ -424,3 +424,46 @@ test("OMP analysis persists parent observer identity and fold restores it for le
     else process.env.USERPROFILE = previousUserProfile;
   }
 });
+
+test("OMP analysis labels missing-ancestor child and grandchild as automation without invented root provenance", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-omp-missing-analysis-"));
+  const dir = initRepo(MEMORY);
+  const sessionRoot = path.join(home, ".omp", "agent", "sessions", "-repo-demo");
+  const files = [
+    [path.join(sessionRoot, "root", "Child.jsonl"), "child-native"],
+    [path.join(sessionRoot, "other-root", "Missing", "Missing.Grandchild.jsonl"), "grandchild-native"],
+  ];
+  for (const [file, id] of files) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const entries = [
+      { type: "title", v: 1, title: "" },
+      { type: "session", version: 3, id, timestamp: "2026-08-27T00:00:00.000Z", cwd: dir },
+      { type: "message", message: { role: "user", content: "Please build the project." } },
+      { type: "message", message: { role: "assistant", content: "Ran make build as instructed." } },
+      { type: "message", message: { role: "user", content: "Now run the tests too." } },
+      { type: "message", message: { role: "assistant", content: "Tests pass." } },
+    ];
+    fs.writeFileSync(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  }
+  fs.writeFileSync(path.join(sessionRoot, "root.jsonl"), "not a session header\n");
+  fs.writeFileSync(path.join(dir, ".backpassrc.json"), JSON.stringify({ discovery: { includeOmp: true } }));
+  const analyzed = runAnalyze(dir, home);
+  assert.equal(analyzed.status, 0, analyzed.output);
+  assert.equal(analyzed.summary.analyzed, 2);
+  const state = new State(dir).ensure();
+  const evidence = state.listEvidence();
+  assert.equal(evidence.length, 2);
+  for (const record of evidence) {
+    assert.equal(record.transcript.interaction, "non-interactive");
+    assert.equal(record.transcript.parentSessionId, null);
+    assert.equal(record.transcript.corroborationIdentity, record.transcript.identity);
+    assert.equal(record.transcript.corroborationNativeId, record.transcript.id.slice("pi-".length));
+    assert.equal(record.transcript.corroborationStartedAt, record.transcript.startedAt);
+    record.transcript.interaction = "interactive";
+    state.writeEvidence(record.transcript, record);
+  }
+  const reused = runAnalyze(dir, home);
+  assert.equal(reused.status, 0, reused.output);
+  assert.deepEqual([reused.summary.analyzed, reused.summary.cached], [0, 2]);
+  assert.ok(state.listEvidence().every((record) => record.transcript.interaction === "non-interactive"));
+});

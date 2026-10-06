@@ -105,7 +105,7 @@ export class ProposalViolation extends Error {
   }
 }
 
-function normalizeEdit(raw, index, knownSources = null) {
+function normalizeEdit(raw, index, knownSources = null, sourceObservers = null) {
   const kind = String(raw?.kind || "").toLowerCase();
   const refs = Array.isArray(raw?.changes) ? raw.changes : Array.isArray(raw?.hunks) ? raw.hunks : [];
   const normalizedEvidence = normalizeEvidence(raw?.evidence);
@@ -124,7 +124,7 @@ function normalizeEdit(raw, index, knownSources = null) {
     // Corroboration is measured from the edit's normalized quotes, never from a
     // model-reported count. When the fold handed over this run's source labels,
     // only those labels count - a typed-but-never-issued source is not a session.
-    transcripts: countSources(normalizedEvidence, knownSources),
+    transcripts: countSources(normalizedEvidence, knownSources, sourceObservers),
   };
 }
 
@@ -139,11 +139,12 @@ function normalizeEvidence(evidence) {
     }));
 }
 
-function countSources(evidence, known = null) {
+function countSources(evidence, known = null, observers = null) {
   if (!Array.isArray(evidence)) return 0;
-  const labels = new Set(evidence.map((e) => normalizeSourceLabel(e?.source)).filter(Boolean));
-  if (!known) return labels.size;
-  return [...labels].filter((label) => known.has(label)).length;
+  const labels = [...new Set(evidence.map((e) => normalizeSourceLabel(e?.source)).filter(Boolean))];
+  const admitted = known ? labels.filter((label) => known.has(label)) : labels;
+  if (!observers) return admitted.length;
+  return new Set(admitted.flatMap((label) => [observers[label]].flat().filter(Boolean))).size;
 }
 
 /** The del-line texts of a hunk that are not carried by `lineCounts` (blank lines ignored). */
@@ -387,7 +388,7 @@ export function buildProposal(rawResult, context) {
   const knownSources = Array.isArray(summary?.sources)
     ? new Set(summary.sources.map(normalizeSourceLabel).filter(Boolean))
     : null;
-  const edits = rawEdits.map((raw, i) => normalizeEdit(raw, i, knownSources));
+  const edits = rawEdits.map((raw, i) => normalizeEdit(raw, i, knownSources, summary?.sourceObservers));
   const changesById = new Map(measured.changes.map((c) => [c.id, c]));
 
   // Skill description lines are always loaded, so they sit under the same cap as the
@@ -633,16 +634,26 @@ export function buildProposal(rawResult, context) {
     if (routing && !preservesAlwaysLoaded(edit.kind) && hunks.some((h) => h.added > 0 && h.removed === 0)) {
       const sessions = [
         ...new Set(
-          edit.evidence.map((item) => summary?.sourceSessions?.[normalizeSourceLabel(item.source)]).filter(Boolean),
+          edit.evidence
+            .flatMap((item) => [summary?.sourceSessions?.[normalizeSourceLabel(item.source)]].flat())
+            .filter(Boolean),
         ),
       ];
-      const sightings = edit.evidence.map((item) => ({
-        sessionId: summary?.sourceSessions?.[normalizeSourceLabel(item.source)],
-        quote: item.text,
-      }));
-      const owner = rootOwnsGap(sightings, routing.rootOwnedGaps)
+      const completeAttribution = edit.evidence.every((item) => {
+        const native = summary?.sourceSessions?.[normalizeSourceLabel(item.source)];
+        return Array.isArray(native) ? native.length > 0 : Boolean(native);
+      });
+      const sightings = edit.evidence.flatMap((item) => {
+        const label = normalizeSourceLabel(item.source);
+        const observers = summary?.sourceObservers?.[label] ?? summary?.sourceSessions?.[label];
+        return [observers]
+          .flat()
+          .filter(Boolean)
+          .map((sessionId) => ({ sessionId, quote: item.text }));
+      });
+      const owner = rootOwnsGap(sightings, routing.rootOwnedGaps ?? summary?.rootOwnedGaps)
         ? routing.rootPath
-        : (routing.ownerOf(sessions) ?? routing.rootPath);
+        : (completeAttribution ? routing.ownerOf(sessions) : null) ?? routing.rootPath;
       const here = routing.weight ?? routing.rootPath;
       if (owner !== here) {
         violations.push(

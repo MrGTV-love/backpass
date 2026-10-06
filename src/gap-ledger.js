@@ -66,8 +66,8 @@ export function emptyGapLedger() {
 }
 
 /**
- * Fold-issued source label for one session. Evidence floors, `summary.sources`, and
- * `sourceProjects` all key off this string, so it must not collapse two sessions.
+ * Fold-issued source label for one native transcript. `summary.sources` and
+ * `sourceProjects` key off this string; observer identities carry evidence floors.
  * Time-prefixed Codex ULIDs share an 8-character prefix when they start in the same
  * minute; keep the native id whole.
  *
@@ -75,10 +75,10 @@ export function emptyGapLedger() {
  * cross-machine corroboration actually is: two machines hitting one gap, named.
  */
 export function gapSource(transcript = {}) {
-  const startedAt = transcript.corroborationStartedAt ?? transcript.startedAt;
+  const startedAt = transcript.startedAt;
   const date = startedAt ? new Date(startedAt).toISOString().slice(0, 10) : "unknown date";
   const host = transcript.host ? ` · ${transcript.host}` : "";
-  const sourceId = transcript.corroborationNativeId || sessionSourceId(transcript);
+  const sourceId = sessionSourceId(transcript);
   return `${transcript.harness} · ${sourceId} · ${date}${host}`;
 }
 
@@ -175,7 +175,27 @@ function sessionIdentityAliases(transcript, sessionIdentity, legacyIds) {
   );
 }
 
-function takePriorObservations(entry, sessionIdentity, aliases) {
+function takePriorObservations(entry, sessionIdentity, aliases, transcript) {
+  const nativeIdentity = transcript.identity || transcript.id;
+  const current = entry.sessions[sessionIdentity];
+  if (
+    current &&
+    !current.sourceSessionId &&
+    transcript.harness !== "pi" &&
+    !transcript.parentSessionId &&
+    nativeIdentity === sessionIdentity
+  ) {
+    current.sourceSessionId = nativeIdentity;
+    current.sightingIds = [...new Set([...(current.sightingIds || []), nativeIdentity])];
+    delete current.unattributedSightings;
+  }
+  for (const alias of aliases) {
+    const observation = entry.sessions[alias];
+    if (!observation || observation.sourceSessionId) continue;
+    observation.sourceSessionId = nativeIdentity;
+    observation.sightingIds = [...new Set([...(observation.sightingIds || []), nativeIdentity])];
+    observation.source = gapSource(transcript);
+  }
   const priors = [entry.sessions[sessionIdentity], ...aliases.map((identity) => entry.sessions[identity])].filter(
     Boolean,
   );
@@ -186,6 +206,20 @@ function takePriorObservations(entry, sessionIdentity, aliases) {
   const coveredBySkill = priors.find((observation) => observation.coveredBySkill)?.coveredBySkill;
   for (const alias of aliases) delete entry.sessions[alias];
   return { priors, firstObservedAt, coveredBySkill };
+}
+
+function hasUnattributedSightings(observation) {
+  return Boolean(observation.unattributedSightings || !observation.sourceSessionId);
+}
+
+function sightingQuotesOf(observation) {
+  return [
+    ...new Set(
+      [observation.quote, ...(observation.sightingQuotes || [])].filter(
+        (quote) => typeof quote === "string" && quote.length > 0,
+      ),
+    ),
+  ];
 }
 
 /**
@@ -237,6 +271,7 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
         entry,
         sessionIdentity,
         sessionIdentityAliases(transcript, sessionIdentity, legacyIds),
+        transcript,
       );
       const { priors, firstObservedAt } = prior;
       const coveredBySkill = gap.coveredBySkill || prior.coveredBySkill;
@@ -258,8 +293,19 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
           null,
         memoryHash: record.memoryHash || null,
         source: gapSource(transcript),
+        sourceSessionId: transcript.identity || transcript.id,
+        sightingIds: [
+          ...new Set(
+            [
+              ...priors.flatMap((observation) => observation.sightingIds || []),
+              transcript.identity || transcript.id,
+            ].filter(Boolean),
+          ),
+        ],
+        ...(priors.some(hasUnattributedSightings) ? { unattributedSightings: true } : {}),
         mistake: gap.mistake,
         quote: gap.quote,
+        sightingQuotes: [...new Set([...priors.flatMap(sightingQuotesOf), ...sightingQuotesOf(gap)])],
         recurrenceRisk: gap.recurrenceRisk,
         phrasings,
         domain:
@@ -291,13 +337,29 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
     if (!(transcript?.corroborationIdentity || transcript?.identity || transcript?.id)) continue;
     const sessionIdentity = corroborationIdentityOf(transcript);
     const aliases = sessionIdentityAliases(transcript, sessionIdentity, legacyIds);
-    if (aliases.length) selections.push({ transcript, sessionIdentity, aliases });
+    const nativeIdentity = transcript.identity || transcript.id;
+    const ordinaryNative =
+      transcript.harness !== "pi" && !transcript.parentSessionId && sessionIdentity === nativeIdentity;
+    if (aliases.length || ordinaryNative) selections.push({ transcript, sessionIdentity, aliases, ordinaryNative });
   }
 
   for (const entry of Object.values(ledger.entries)) {
-    for (const { transcript, sessionIdentity, aliases } of selections) {
+    for (const { transcript, sessionIdentity, aliases, ordinaryNative } of selections) {
+      const observation = entry.sessions[sessionIdentity];
+      if (ordinaryNative && observation && !observation.sourceSessionId) {
+        observation.sourceSessionId = transcript.identity || transcript.id;
+        observation.sightingIds = [
+          ...new Set([...(observation.sightingIds || []), observation.sourceSessionId]),
+        ];
+        delete observation.unattributedSightings;
+      }
       if (!aliases.some((identity) => entry.sessions[identity])) continue;
-      const { priors, firstObservedAt, coveredBySkill } = takePriorObservations(entry, sessionIdentity, aliases);
+      const { priors, firstObservedAt, coveredBySkill } = takePriorObservations(
+        entry,
+        sessionIdentity,
+        aliases,
+        transcript,
+      );
       const current = priors[0];
       const project = current.project || priors.find((observation) => observation.project)?.project;
       const projectRoot = current.projectRoot || priors.find((observation) => observation.projectRoot)?.projectRoot;
@@ -305,8 +367,9 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
       entry.sessions[sessionIdentity] = {
         ...current,
         ...(firstObservedAt ? { firstObservedAt } : {}),
-        sessionStartedAt: transcript.corroborationStartedAt ?? transcript.startedAt ?? current.sessionStartedAt ?? null,
-        source: gapSource(transcript),
+        sightingIds: [...new Set(priors.flatMap((observation) => observation.sightingIds || []))],
+        sightingQuotes: [...new Set(priors.flatMap(sightingQuotesOf))],
+        ...(priors.some(hasUnattributedSightings) ? { unattributedSightings: true } : {}),
         phrasings: [
           ...new Set([
             entry.proposedInstruction,
@@ -397,8 +460,12 @@ export function ledgerGapObservations(ledger, memoryPath, skills = null) {
         sessionId,
         gapIds: [entry.id, ...(entry.aliases || [])],
         source: obs.source,
+        ...(obs.sourceSessionId ? { sourceSessionId: obs.sourceSessionId } : {}),
+        sightingIds: obs.sightingIds || [],
+        unattributedSightings: hasUnattributedSightings(obs),
         mistake: obs.mistake,
         quote: obs.quote,
+        sightingQuotes: sightingQuotesOf(obs),
         recurrenceRisk: obs.recurrenceRisk,
         domain: obs.domain === "orchestration" ? "orchestration" : "project",
         ...(obs.coveredBySkill && (!skillNames || skillNames.has(obs.coveredBySkill))
@@ -464,6 +531,9 @@ export function mergeGapEntries(ledger, groups) {
           if (!prior.coveredBySkill && obs.coveredBySkill) prior.coveredBySkill = obs.coveredBySkill;
           if (!prior.project && obs.project) prior.project = obs.project;
           if (!prior.projectRoot && obs.projectRoot) prior.projectRoot = obs.projectRoot;
+          prior.sightingIds = [...new Set([...(prior.sightingIds || []), ...(obs.sightingIds || [])])];
+          prior.sightingQuotes = [...new Set([...sightingQuotesOf(prior), ...sightingQuotesOf(obs)])];
+          if (hasUnattributedSightings(prior) || hasUnattributedSightings(obs)) prior.unattributedSightings = true;
           prior.phrasings = [
             ...new Set([
               ...(prior.phrasings || [target.proposedInstruction]),

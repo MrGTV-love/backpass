@@ -33,7 +33,7 @@ import {
  */
 
 export const name = "pi";
-export const cacheVersion = 4;
+export const cacheVersion = 5;
 
 const SUBAGENT_DEPTH = 2;
 
@@ -108,7 +108,13 @@ export function enumerate({ config } = {}) {
       seen.add(key);
       const stat = statOrNull(file);
       if (!stat) continue;
-      out.push({ key, path: file, mtimeMs: stat.mtimeMs, bytes: stat.size });
+      out.push({
+        key,
+        path: file,
+        mtimeMs: stat.mtimeMs,
+        bytes: stat.size,
+        subagent: spec.nested && path.relative(spec.path, file).split(path.sep).length > 2,
+      });
     }
   }
   return out;
@@ -194,7 +200,7 @@ export function classify(candidate, options = {}) {
     remotes: [],
     startedAt: entry.timestamp ? Date.parse(entry.timestamp) : candidate.mtimeMs,
     model: null,
-    interactionSignals: emptyInteractionSignals(),
+    interactionSignals: candidate.subagent ? { source: "subagent" } : emptyInteractionSignals(),
   };
 
   for (const ancestorPath of ancestorSessionPaths(candidate.path)) {

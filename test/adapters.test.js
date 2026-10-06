@@ -307,6 +307,37 @@ function withPiStoreEnv(
   }
 }
 
+test("pi nested layout signals subagents without readable ancestor headers", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-omp-missing-headers-"));
+  const sessionDir = path.join(homeDir, ".omp", "agent", "sessions", "-repo-demo");
+  const childPath = path.join(sessionDir, "root", "Subagent.jsonl");
+  const grandchildPath = path.join(sessionDir, "other-root", "Missing", "Missing.Child.jsonl");
+  writeOmpSession(childPath, { id: "child-native", cwd: "/repo/demo" });
+  writeOmpSession(grandchildPath, { id: "grandchild-native", cwd: "/repo/demo" });
+  fs.writeFileSync(path.join(sessionDir, "root.jsonl"), "not a session header\n");
+  const piPath = path.join(homeDir, ".pi", "agent", "sessions", "-repo-demo", "ordinary.jsonl");
+  const bridgeDir = path.join(homeDir, "bridge");
+  const bridgePath = path.join(bridgeDir, "ordinary.jsonl");
+  writePiSession(piPath, { id: "pi-native", cwd: "/repo/demo" });
+  writePiSession(bridgePath, { id: "bridge-native", cwd: "/repo/demo" });
+
+  withPiStoreEnv({ homeDir, bridgeDir }, () => {
+    const candidates = pi.enumerate({ config: { discovery: { includeOmp: true } } });
+    for (const file of [childPath, grandchildPath]) {
+      const descriptor = pi.classify(candidates.find((candidate) => candidate.path === file));
+      assert.equal(descriptor.interactionSignals.source, "subagent");
+      assert.equal(descriptor.parentSessionId, undefined);
+      assert.equal(descriptor.parentSessionPath, undefined);
+      assert.equal(descriptor.parentSessionStartedAt, undefined);
+    }
+    for (const file of [piPath, bridgePath]) {
+      const descriptor = pi.classify(candidates.find((candidate) => candidate.path === file));
+      assert.deepEqual(descriptor.interactionSignals, {});
+      assert.equal(descriptor.parentSessionId, undefined);
+    }
+  });
+});
+
 test("pi adapter enumerates standalone and BB-managed session roots without duplicates", () => {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-pi-home-"));
   const piAgentDir = path.join(fakeHome, "pi-agent");

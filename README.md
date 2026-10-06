@@ -253,9 +253,12 @@ and Codex. Explicit Pi store environment overrides still work without this setti
 it controls only the additional default OMP store, not the harness backpass invokes.
 
 OMP nests subagent JSONL files below each parent session, and a subagent's own subagents
-one level further down. Backpass analyzes each file separately, but uses the root session as
-their shared corroboration source; a session and its subagents cannot count as independent
-sessions.
+one level further down. Backpass analyzes each file separately and uses its native
+sightings for nested-memory ownership, but counts the root session as their shared
+corroborating observer; a session and its subagents cannot count as independent sessions,
+including across synced SSH stores. Nested descendants are non-interactive even when
+ancestor headers are unavailable; root provenance is linked only when those headers can
+be read.
 
 OpenCode collection reads both store layouts: OpenCode 1.x (`session`, `message`, `part`) and OpenCode 2.x (`session_v2`, `session_message`).
 For 2.x, session activity uses the later of the session's update time and its newest message's update time.
