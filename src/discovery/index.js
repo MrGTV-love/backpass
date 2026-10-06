@@ -271,8 +271,13 @@ function dropCrossHostDuplicates(transcripts) {
       const host = transcript.host || "local";
       drops.set(host, (drops.get(host) || 0) + 1);
       const droppedObserver = transcript.corroborationIdentity;
-      const retainedObserver = canonicalObserver(previous.corroborationIdentity);
-      if (droppedObserver !== retainedObserver && !observerAliases.has(droppedObserver)) {
+      const retainedObserver = previous.corroborationIdentity;
+      if (
+        transcript.parentSessionId &&
+        previous.parentSessionId &&
+        droppedObserver !== retainedObserver &&
+        !observerAliases.has(droppedObserver)
+      ) {
         observerAliases.set(droppedObserver, retainedObserver);
       }
       continue;
@@ -286,10 +291,19 @@ function dropCrossHostDuplicates(transcripts) {
   for (const transcript of transcripts) {
     const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
     const previous = observers.get(key);
-    if (!previous) observers.set(key, transcript);
-    else if (previous.host !== (transcript.host || null)) {
+    if (
+      !previous ||
+      (previous.host === (transcript.host || null) && !previous.parentSessionId && transcript.parentSessionId)
+    ) {
+      observers.set(key, transcript);
+    }
+  }
+  for (const transcript of transcripts) {
+    const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
+    const previous = observers.get(key);
+    if (previous.host !== (transcript.host || null)) {
       const observer = transcript.corroborationIdentity;
-      const retainedObserver = canonicalObserver(previous.corroborationIdentity);
+      const retainedObserver = previous.corroborationIdentity;
       if (observer !== retainedObserver && !observerAliases.has(observer)) {
         observerAliases.set(observer, retainedObserver);
       }

@@ -65,6 +65,44 @@ async function withRemotePiEnv(scenario, fn) {
   }
 }
 
+function observerRecords(transcripts) {
+  return transcripts.map((transcript) => ({
+    status: "ok",
+    memoryPath: "AGENTS.md",
+    transcript,
+    negative: [{ instruction: "db-rule", class: "harm", quote: "following the rule caused damage" }],
+    gaps: [{
+      proposedInstruction: "Read docs/db.md before writing queries.",
+      mistake: "re-derived the schema",
+      quote: "read the schema",
+      recurrenceRisk: "high",
+      domain: "project",
+    }],
+  }));
+}
+
+function assertSingletonObserver(transcripts, identity) {
+  const records = observerRecords(transcripts);
+  const folded = foldEvidence(records, { minGapEvidence: 2 });
+  assert.equal(folded.gaps.length, 0);
+  assert.equal(folded.totals.droppedGapSingletons, 1);
+  assert.equal(folded.instructions[0].harmSessions, 1);
+  const ledger = { version: 1, entries: {} };
+  recordGapObservations(ledger, records);
+  const sessions = Object.values(ledger.entries)[0].sessions;
+  assert.deepEqual(Object.keys(sessions), [identity]);
+  assert.deepEqual(sessions[identity].sightingIds.sort(), transcripts.map((transcript) => transcript.identity).sort());
+  assert.equal(sessions[identity].sourceSessionId, transcripts.at(-1).identity);
+  assert.equal(sessions[identity].source, gapSource(transcripts.at(-1)));
+  assert.ok(sessions[identity].source.includes(transcripts.at(-1).nativeId));
+  const persisted = foldEvidence(records, {
+    minGapEvidence: 2,
+    gapObservations: ledgerGapObservations(ledger, "AGENTS.md"),
+  });
+  assert.equal(persisted.gaps.length, 0);
+  assert.equal(persisted.instructions[0].harmSessions, 1);
+}
+
 test("remote OMP subagents keep their parent's corroboration identity", async () => {
   const s = scenario();
   const sessionDir = path.join(s.remoteHome, ".omp", "agent", "sessions", "-repo-demo");
@@ -170,12 +208,113 @@ test("a copied OMP root and retained remote descendants count as one observer wi
   assert.equal(localChild.corroborationIdentity, root.identity);
   const grandchild = split.transcripts.find((transcript) => transcript.nativeId === "grandchild-native");
   const splitRoot = roots.find((transcript) => transcript.path === splitPath);
-  assert.equal(grandchild.corroborationIdentity, splitRoot.identity);
+  assert.equal(grandchild.corroborationIdentity, localChild.corroborationIdentity);
+  assert.notEqual(grandchild.corroborationIdentity, splitRoot.identity);
+  assertSingletonObserver([localChild, grandchild], root.identity);
+  const independentRootEvidence = foldEvidence(observerRecords([localChild, grandchild, splitRoot]), { minGapEvidence: 2 });
+  assert.equal(independentRootEvidence.gaps.length, 1);
+  assert.equal(independentRootEvidence.instructions[0].harmSessions, 2);
   const independent = split.transcripts.find((transcript) => transcript.nativeId === "independent-native");
   assert.ok(independent);
   assert.equal(independent.corroborationIdentity, independent.identity);
   assert.ok(roots.every((transcript) => transcript.corroborationIdentity !== independent.identity));
 });
+
+for (const remoteOnly of [false, true]) {
+  for (const filtered of [false, true]) {
+    for (const familyStore of [".omp", ".pi"]) {
+      test(`copied descendants retain their split-root family (${remoteOnly ? "remote-only" : "local"}, ${filtered ? "filtered" : "all"}, ${familyStore})`, async () => {
+        const s = scenario();
+        const now = Date.parse("2026-08-28T12:00:00.000Z");
+        const old = "2026-08-27T00:00:00.000Z";
+        const recent = "2026-08-28T11:00:00.000Z";
+        const firstHome = remoteOnly ? s.remoteHome : s.localHome;
+        const firstCwd = remoteOnly ? s.remoteClone : s.repoRoot;
+        const secondHome = remoteOnly ? tmpdir("remote-other") : s.remoteHome;
+        const secondCwd = remoteOnly
+          ? initRepo(path.join(secondHome, "code", "demo"), `https://${REMOTE}.git`)
+          : s.remoteClone;
+        if (remoteOnly) s.hosts["mac-other"] = { home: secondHome };
+        const rootName = "2026-08-27T00-00-00.000Z_root";
+        const familyDirectory = path.join(firstHome, familyStore, "agent", "sessions", "-repo-demo");
+        const independentStore = familyStore === ".omp" ? ".pi" : ".omp";
+        const independentPath = path.join(firstHome, independentStore, "agent", "sessions", "-repo-demo", "split-root.jsonl");
+        const familyPath = path.join(familyDirectory, `${rootName}.jsonl`);
+        const childPath = path.join(familyDirectory, rootName, "Child.jsonl");
+        const copiedDirectory = path.join(secondHome, ".omp", "agent", "sessions", "-repo-demo");
+        const grandchildPath = path.join(copiedDirectory, rootName, "Child", "Child.Grandchild.jsonl");
+        const write = (file, id, cwd, timestamp) => {
+          writeOmpSession(file, id, cwd, timestamp);
+          fs.utimesSync(file, Date.parse(timestamp) / 1000, Date.parse(timestamp) / 1000);
+        };
+        write(independentPath, "root-native", firstCwd, recent);
+        write(familyPath, "root-native", firstCwd, old);
+        write(childPath, "child-native", firstCwd, recent);
+        write(path.join(copiedDirectory, `${rootName}.jsonl`), "root-native", secondCwd, old);
+        write(path.join(copiedDirectory, rootName, "Child.jsonl"), "child-native", secondCwd, recent);
+        write(grandchildPath, "grandchild-native", secondCwd, recent);
+        const result = await withRemotePiEnv(s, async () => {
+          const options = projectRun(s.repoRoot, {
+            discovery: {
+              hosts: remoteOnly ? ["mac-home", "mac-other"] : ["mac-home"],
+              harnesses: ["pi"],
+              since: filtered ? "1d" : "all",
+              includeOmp: true,
+            },
+          });
+          const discovered = await discoverTranscripts({ ...options, now });
+          await closeSshMasters(discovered.remoteMasters);
+          return discovered;
+        });
+        assert.equal(result.transcripts.length, filtered ? 3 : 4);
+        assert.equal(result.perHost.at(-1).duplicates, filtered ? 1 : 2);
+        const independent = result.transcripts.find((transcript) => transcript.path === independentPath);
+        const family = result.transcripts.find((transcript) => transcript.path === familyPath);
+        const child = result.transcripts.find((transcript) => transcript.nativeId === "child-native");
+        const grandchild = result.transcripts.find((transcript) => transcript.nativeId === "grandchild-native");
+        assert.ok(independent && child && grandchild);
+        assert.equal(child.path, childPath);
+        assert.equal(child.host, remoteOnly ? "mac-home" : null);
+        assert.equal(grandchild.path, grandchildPath);
+        assert.equal(grandchild.host, remoteOnly ? "mac-other" : "mac-home");
+        assert.notEqual(child.identity, grandchild.identity);
+        assert.equal(independent.nativeId, "root-native");
+        assert.equal(independent.corroborationIdentity, independent.identity);
+        assert.notEqual(independent.corroborationIdentity, child.corroborationIdentity);
+        assert.equal(grandchild.corroborationIdentity, child.corroborationIdentity);
+        for (const transcript of [child, grandchild]) {
+          assert.equal(transcript.parentSessionId, "root-native");
+          assert.equal(transcript.corroborationNativeId, "root-native");
+          assert.equal(transcript.corroborationStartedAt, Date.parse(old));
+          assert.equal(transcript.interaction, NON_INTERACTIVE);
+        }
+        if (filtered) {
+          assert.equal(family, undefined);
+        } else {
+          assert.ok(family);
+          assert.equal(family.nativeId, independent.nativeId);
+          assert.notEqual(family.identity, independent.identity);
+          assert.equal(family.corroborationIdentity, family.identity);
+          assert.equal(child.corroborationIdentity, family.identity);
+        }
+        assertSingletonObserver([child, grandchild], child.corroborationIdentity);
+        const records = observerRecords([child, grandchild, independent]);
+        const folded = foldEvidence(records, { minGapEvidence: 2 });
+        assert.equal(folded.gaps.length, 1);
+        assert.equal(folded.instructions[0].harmSessions, 2);
+        const ledger = { version: 1, entries: {} };
+        recordGapObservations(ledger, records);
+        assert.equal(Object.keys(Object.values(ledger.entries)[0].sessions).length, 2);
+        const persisted = foldEvidence(records, {
+          minGapEvidence: 2,
+          gapObservations: ledgerGapObservations(ledger, "AGENTS.md"),
+        });
+        assert.equal(persisted.gaps.length, 1);
+        assert.equal(persisted.instructions[0].harmSessions, 2);
+      });
+    }
+  }
+}
 
 test("filtered OMP roots still share one cross-host gap and harm observer", async () => {
   const now = Date.parse("2026-08-28T12:00:00.000Z");
