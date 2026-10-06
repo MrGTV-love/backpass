@@ -447,14 +447,16 @@ test("OMP child native ownership agrees across direct and ledger-only folds", as
     "AGENTS.md": "# Root\n\n- Use pnpm.\n",
     "apps/api/AGENTS.md": "# API\n\n- Keep handlers small.\n",
   });
-  const staged = new Map([null, API.path].map((weight) => [
-    weight,
-    stageAndMeasure({
-      repo,
-      memoryPath: weight ?? "AGENTS.md",
-      edit: (root) => writeIn(root, weight ?? "AGENTS.md", (text) => `${text}- ${API_GAP}\n`),
-    }),
-  ]));
+  const staged = new Map(
+    [null, API.path].map((weight) => [
+      weight,
+      stageAndMeasure({
+        repo,
+        memoryPath: weight ?? "AGENTS.md",
+        edit: (root) => writeIn(root, weight ?? "AGENTS.md", (text) => `${text}- ${API_GAP}\n`),
+      }),
+    ]),
+  );
   const roots = checkoutRoots(repo);
   const attribution = new Map();
   const transcripts = [];
@@ -483,24 +485,24 @@ test("OMP child native ownership agrees across direct and ledger-only folds", as
     };
     transcripts.push(root, child);
     attribution.set(root.identity, workedPaths(root, [], roots));
-    attribution.set(child.identity, workedPaths(child, [
-      { kind: "tool", input: { path: `apps/api/handler-${index}.ts` } },
-    ], roots));
+    attribution.set(
+      child.identity,
+      workedPaths(child, [{ kind: "tool", input: { path: `apps/api/handler-${index}.ts` } }], roots),
+    );
   }
-  const expectedSources = [
-    "pi · child-1 · 2026-08-02",
-    "pi · child-2 · 2026-08-02",
-  ];
-  const ctx = { repo, config: {
-    state: new State(repo.root).ensure(),
-    minGapEvidence: 2,
-    gapLedgerMaxAge: "all",
-    memoryFiles: ["AGENTS.md"],
-  } };
+  const expectedSources = ["pi · child-1 · 2026-08-02", "pi · child-2 · 2026-08-02"];
+  const ctx = {
+    repo,
+    config: {
+      state: new State(repo.root).ensure(),
+      minGapEvidence: 2,
+      gapLedgerMaxAge: "all",
+      memoryFiles: ["AGENTS.md"],
+    },
+  };
   for (const weight of [null, API.path]) {
     const pass = weight === null ? ctx : nestedContext(ctx, API);
-    const selected =
-      weight === null ? transcripts : transcripts.filter((transcript) => transcript.parentSessionId);
+    const selected = weight === null ? transcripts : transcripts.filter((transcript) => transcript.parentSessionId);
     const route = routingFor([API], attribution, "AGENTS.md", weight);
     const measurement = staged.get(weight);
     const file = measurement.memoryFile;
@@ -522,35 +524,46 @@ test("OMP child native ownership agrees across direct and ledger-only folds", as
     for (const summary of [direct, admitted, persisted]) {
       if (weight === null) {
         assert.deepEqual(summary.gaps, []);
-        assert.deepEqual(summary.routedGaps.map((gap) => [gap.owner, gap.sessions]), [[API.path, 2]]);
+        assert.deepEqual(
+          summary.routedGaps.map((gap) => [gap.owner, gap.sessions]),
+          [[API.path, 2]],
+        );
       } else {
         assert.equal(summary.gaps.length, 1);
         assert.equal(summary.gaps[0].sessions, 2);
-        assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.source), expectedSources);
+        assert.deepEqual(
+          summary.gaps[0].quotes.map((quote) => quote.source),
+          expectedSources,
+        );
       }
       for (const [index, source] of expectedSources.entries()) {
         assert.equal(summary.sourceSessions[source], `pi-file-child-${index + 1}`);
         assert.equal(summary.sourceObservers[source], `pi-file-root-${index + 1}`);
       }
-      const result = buildProposal({
-        edits: [{
-          changes: measurement.measured.changes.map((change) => change.id),
-          kind: "add",
-          title: "API contract",
-          evidence: expectedSources.map((source, index) => ({
-            polarity: "negative",
-            text: `pi-file-child-${index + 1} hit it`,
-            source,
-          })),
-        }],
-      }, {
-        memoryFile: file,
-        config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
-        repo,
-        summary,
-        measured: measurement.measured,
-        routing: route,
-      });
+      const result = buildProposal(
+        {
+          edits: [
+            {
+              changes: measurement.measured.changes.map((change) => change.id),
+              kind: "add",
+              title: "API contract",
+              evidence: expectedSources.map((source, index) => ({
+                polarity: "negative",
+                text: `pi-file-child-${index + 1} hit it`,
+                source,
+              })),
+            },
+          ],
+        },
+        {
+          memoryFile: file,
+          config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
+          repo,
+          summary,
+          measured: measurement.measured,
+          routing: route,
+        },
+      );
       if (weight === null) {
         assert.equal(result.proposal.edits.length, 0);
         assert.ok(result.violations.some((violation) => violation.includes(`it belongs in ${API.path}`)));
@@ -568,17 +581,26 @@ test("an unknown native observer beside an API child keeps both the fold and pro
     "apps/api/AGENTS.md": "# API\n\n- Keep handlers small.\n",
   });
   const child = { identity: "native-api-child", cwd: repo.root };
-  const attribution = new Map([[child.identity, workedPaths(child, [
-    { kind: "tool", input: { path: "apps/api/handler.ts" } },
-  ], checkoutRoots(repo))]]);
+  const attribution = new Map([
+    [
+      child.identity,
+      workedPaths(child, [{ kind: "tool", input: { path: "apps/api/handler.ts" } }], checkoutRoots(repo)),
+    ],
+  ]);
   const observations = [
     {
-      proposedInstruction: API_GAP, sessionId: "observer-api", sourceSessionId: child.identity,
-      sightingIds: [child.identity], source: "pi · api-child · 2026-08-02", quote: "API child quote",
+      proposedInstruction: API_GAP,
+      sessionId: "observer-api",
+      sourceSessionId: child.identity,
+      sightingIds: [child.identity],
+      source: "pi · api-child · 2026-08-02",
+      quote: "API child quote",
     },
     {
-      proposedInstruction: API_GAP, sessionId: "legacy-observer",
-      source: "pi · legacy-root · 2026-08-01", quote: "unknown native quote",
+      proposedInstruction: API_GAP,
+      sessionId: "legacy-observer",
+      source: "pi · legacy-root · 2026-08-01",
+      quote: "unknown native quote",
     },
   ];
   const rootRoute = routingFor([API], attribution, "AGENTS.md", null);
@@ -597,23 +619,34 @@ test("an unknown native observer beside an API child keeps both the fold and pro
       assert.equal(summary.routedGaps[0].owner, "AGENTS.md");
     }
     const staged = stageAndMeasure({
-      repo, memoryPath: weight ?? "AGENTS.md",
+      repo,
+      memoryPath: weight ?? "AGENTS.md",
       edit: (root) => writeIn(root, weight ?? "AGENTS.md", (text) => `${text}- ${API_GAP}\n`),
     });
-    const result = buildProposal({
-      edits: [{
-        changes: staged.measured.changes.map((change) => change.id),
-        kind: "add", title: "API contract",
-        evidence: observations.map((observation) => ({
-          polarity: "negative", text: observation.quote, source: observation.source,
-        })),
-      }],
-    }, {
-      memoryFile: staged.memoryFile,
-      measured: staged.measured,
-      config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
-      repo, summary, routing: route,
-    });
+    const result = buildProposal(
+      {
+        edits: [
+          {
+            changes: staged.measured.changes.map((change) => change.id),
+            kind: "add",
+            title: "API contract",
+            evidence: observations.map((observation) => ({
+              polarity: "negative",
+              text: observation.quote,
+              source: observation.source,
+            })),
+          },
+        ],
+      },
+      {
+        memoryFile: staged.memoryFile,
+        measured: staged.measured,
+        config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
+        repo,
+        summary,
+        routing: route,
+      },
+    );
     if (weight === null) {
       assert.deepEqual(result.violations, []);
       assert.equal(result.proposal.edits[0].transcripts, 2);
@@ -623,20 +656,30 @@ test("an unknown native observer beside an API child keeps both the fold and pro
         result.violations.some((violation) => violation.includes("cross-cutting evidence belongs in AGENTS.md")),
       );
     }
-    const withoutRootOverride = buildProposal({
-      edits: [{
-        changes: staged.measured.changes.map((change) => change.id),
-        kind: "add", title: "API contract",
-        evidence: observations.map((observation) => ({
-          polarity: "negative", text: observation.quote, source: observation.source,
-        })),
-      }],
-    }, {
-      memoryFile: staged.memoryFile,
-      measured: staged.measured,
-      config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
-      repo, summary: { ...summary, rootOwnedGaps: [] }, routing: { ...route, rootOwnedGaps: [] },
-    });
+    const withoutRootOverride = buildProposal(
+      {
+        edits: [
+          {
+            changes: staged.measured.changes.map((change) => change.id),
+            kind: "add",
+            title: "API contract",
+            evidence: observations.map((observation) => ({
+              polarity: "negative",
+              text: observation.quote,
+              source: observation.source,
+            })),
+          },
+        ],
+      },
+      {
+        memoryFile: staged.memoryFile,
+        measured: staged.measured,
+        config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
+        repo,
+        summary: { ...summary, rootOwnedGaps: [] },
+        routing: { ...route, rootOwnedGaps: [] },
+      },
+    );
     assert.equal(withoutRootOverride.proposal.edits.length, weight === null ? 1 : 0);
   }
 });
@@ -666,13 +709,21 @@ test("same-root API and WEB quote variants keep the API sibling root-pinned", as
     },
   }));
   const selected = records.filter((record) => !record.transcript.id.includes("web"));
-  const attribution = new Map(records.map((record) => [
-    record.transcript.identity,
-    workedPaths(record.transcript, [{
-      kind: "tool",
-      input: { path: record.transcript.id.includes("web") ? "apps/web/view.ts" : "apps/api/handler.ts" },
-    }], checkoutRoots(repo)),
-  ]));
+  const attribution = new Map(
+    records.map((record) => [
+      record.transcript.identity,
+      workedPaths(
+        record.transcript,
+        [
+          {
+            kind: "tool",
+            input: { path: record.transcript.id.includes("web") ? "apps/web/view.ts" : "apps/api/handler.ts" },
+          },
+        ],
+        checkoutRoots(repo),
+      ),
+    ]),
+  );
   const rootRoute = routingFor([API, WEB], attribution, "AGENTS.md", null);
   const ctx = {
     repo,
@@ -709,46 +760,51 @@ test("same-root API and WEB quote variants keep the API sibling root-pinned", as
   for (const root of [directRoot, admittedRoot, persistedRoot]) {
     assert.equal(root.gaps.length, 1);
     assert.equal(root.gaps[0].sessions, 2);
-    assert.ok(root.rootOwnedGaps[0].some((item) =>
-      item.sessionId === "shared-observer" && item.quote === "shared-web hit it",
-    ));
-    assert.ok(root.rootOwnedGaps[0].some((item) =>
-      item.sessionId === "shared-observer" && item.quote === "shared-api hit it",
-    ));
+    assert.ok(
+      root.rootOwnedGaps[0].some((item) => item.sessionId === "shared-observer" && item.quote === "shared-web hit it"),
+    );
+    assert.ok(
+      root.rootOwnedGaps[0].some((item) => item.sessionId === "shared-observer" && item.quote === "shared-api hit it"),
+    );
     const route = { ...rootRoute, weight: API.path, rootOwnedGaps: root.rootOwnedGaps };
     const directApi = foldEvidence(nestedRecords, { minGapEvidence: 2, route });
-    const admittedApi = await foldForRun(
-      nested, staged.memoryFile, staged.memoryFile.hash, [], nestedTranscripts, { route },
-    );
-    const persistedApi = await foldForRun(
-      nested, staged.memoryFile, "changed-api-hash", [], nestedTranscripts, { route },
-    );
+    const admittedApi = await foldForRun(nested, staged.memoryFile, staged.memoryFile.hash, [], nestedTranscripts, {
+      route,
+    });
+    const persistedApi = await foldForRun(nested, staged.memoryFile, "changed-api-hash", [], nestedTranscripts, {
+      route,
+    });
     for (const summary of [directApi, admittedApi, persistedApi]) {
       assert.deepEqual(summary.gaps, []);
       assert.equal(summary.routedGaps[0].owner, "AGENTS.md");
-      const result = buildProposal({
-        edits: [{
-          changes: staged.measured.changes.map((change) => change.id),
-          kind: "add",
-          title: "API contract",
-          evidence: selected.map((record) => ({
-            polarity: "negative",
-            text: record.gaps[0].quote,
-            source: `pi · ${record.transcript.nativeId} · 2026-08-02`,
-          })),
-        }],
-      }, {
-        memoryFile: staged.memoryFile,
-        measured: staged.measured,
-        config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
-        repo,
-        summary,
-        routing: route,
-      });
+      const result = buildProposal(
+        {
+          edits: [
+            {
+              changes: staged.measured.changes.map((change) => change.id),
+              kind: "add",
+              title: "API contract",
+              evidence: selected.map((record) => ({
+                polarity: "negative",
+                text: record.gaps[0].quote,
+                source: `pi · ${record.transcript.nativeId} · 2026-08-02`,
+              })),
+            },
+          ],
+        },
+        {
+          memoryFile: staged.memoryFile,
+          measured: staged.measured,
+          config: { budgetTokens: 5000, maxEditsPerRun: 5, minGapEvidence: 2, skillsDir: ".agents/skills" },
+          repo,
+          summary,
+          routing: route,
+        },
+      );
       assert.equal(result.proposal.edits.length, 0);
-      assert.ok(result.violations.some((violation) =>
-        violation.includes("cross-cutting evidence belongs in AGENTS.md"),
-      ));
+      assert.ok(
+        result.violations.some((violation) => violation.includes("cross-cutting evidence belongs in AGENTS.md")),
+      );
     }
   }
   assert.equal(directRoot.gaps[0].quotes[0].text, "shared-web hit it");

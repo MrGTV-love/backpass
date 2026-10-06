@@ -4,8 +4,21 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { applyHostFlag, loadConfig } from "../src/config.js";
-import { discoverProject, initRepo, projectRun, sshCalls, tmpdir, withRemoteEnv, writeClaudeSession } from "./helpers/remote.js";
-import { disambiguateSourceLabels, gapSource, ledgerGapObservations, recordGapObservations } from "../src/gap-ledger.js";
+import {
+  discoverProject,
+  initRepo,
+  projectRun,
+  sshCalls,
+  tmpdir,
+  withRemoteEnv,
+  writeClaudeSession,
+} from "./helpers/remote.js";
+import {
+  disambiguateSourceLabels,
+  gapSource,
+  ledgerGapObservations,
+  recordGapObservations,
+} from "../src/gap-ledger.js";
 import { classifySshFailure, closeSshMasters } from "../src/discovery/remote/ssh.js";
 import { discoverTranscripts } from "../src/discovery/index.js";
 import { resolveHostList } from "../src/discovery/hosts.js";
@@ -71,13 +84,15 @@ function observerRecords(transcripts) {
     memoryPath: "AGENTS.md",
     transcript,
     negative: [{ instruction: "db-rule", class: "harm", quote: "following the rule caused damage" }],
-    gaps: [{
-      proposedInstruction: "Read docs/db.md before writing queries.",
-      mistake: "re-derived the schema",
-      quote: "read the schema",
-      recurrenceRisk: "high",
-      domain: "project",
-    }],
+    gaps: [
+      {
+        proposedInstruction: "Read docs/db.md before writing queries.",
+        mistake: "re-derived the schema",
+        quote: "read the schema",
+        recurrenceRisk: "high",
+        domain: "project",
+      },
+    ],
   }));
 }
 
@@ -153,7 +168,11 @@ test("a copied OMP root and retained remote descendants count as one observer wi
   writeOmpSession(path.join(localRoot, `${rootName}.jsonl`), "root-native", s.repoRoot);
   writeOmpSession(path.join(remoteRoot, `${rootName}.jsonl`), "root-native", s.remoteClone);
   writeOmpSession(path.join(remoteRoot, rootName, "Child.jsonl"), "child-native", s.remoteClone);
-  writeOmpSession(path.join(remoteRoot, rootName, "Child", "Child.Grandchild.jsonl"), "grandchild-native", s.remoteClone);
+  writeOmpSession(
+    path.join(remoteRoot, rootName, "Child", "Child.Grandchild.jsonl"),
+    "grandchild-native",
+    s.remoteClone,
+  );
   const discover = () =>
     withRemotePiEnv(s, () =>
       discoverProject(s.repoRoot, {
@@ -179,13 +198,15 @@ test("a copied OMP root and retained remote descendants count as one observer wi
     status: "ok",
     memoryPath: "AGENTS.md",
     transcript,
-    gaps: [{
-      proposedInstruction: "Read docs/db.md before writing queries.",
-      mistake: "re-derived the schema",
-      quote: "read the schema",
-      recurrenceRisk: "high",
-      domain: "project",
-    }],
+    gaps: [
+      {
+        proposedInstruction: "Read docs/db.md before writing queries.",
+        mistake: "re-derived the schema",
+        quote: "read the schema",
+        recurrenceRisk: "high",
+        domain: "project",
+      },
+    ],
   }));
   const folded = foldEvidence(records, { minGapEvidence: 2 });
   assert.equal(folded.gaps.length, 0);
@@ -211,7 +232,9 @@ test("a copied OMP root and retained remote descendants count as one observer wi
   assert.equal(grandchild.corroborationIdentity, localChild.corroborationIdentity);
   assert.notEqual(grandchild.corroborationIdentity, splitRoot.identity);
   assertSingletonObserver([localChild, grandchild], root.identity);
-  const independentRootEvidence = foldEvidence(observerRecords([localChild, grandchild, splitRoot]), { minGapEvidence: 2 });
+  const independentRootEvidence = foldEvidence(observerRecords([localChild, grandchild, splitRoot]), {
+    minGapEvidence: 2,
+  });
   assert.equal(independentRootEvidence.gaps.length, 1);
   assert.equal(independentRootEvidence.instructions[0].harmSessions, 2);
   const independent = split.transcripts.find((transcript) => transcript.nativeId === "independent-native");
@@ -244,7 +267,10 @@ for (const remoteOnly of [false, true]) {
       write(path.join(firstDirectory, `${rootName}.jsonl`), "root-native", firstCwd, old);
       fs.writeFileSync(path.join(firstDirectory, `${rootName}.jsonl`), "not a session header\n");
       write(path.join(secondDirectory, `${rootName}.jsonl`), "root-native", secondCwd, old);
-      for (const [name, id] of [["A", "a-native"], ["B", "b-native"]]) {
+      for (const [name, id] of [
+        ["A", "a-native"],
+        ["B", "b-native"],
+      ]) {
         write(path.join(firstDirectory, rootName, `${name}.jsonl`), id, firstCwd, recent);
         write(path.join(secondDirectory, rootName, `${name}.jsonl`), id, secondCwd, recent);
       }
@@ -327,7 +353,10 @@ for (const filtered of [false, true]) {
       return discovered;
     });
     assert.equal(result.transcripts.length, 4);
-    assert.deepEqual(result.perHost.map((host) => host.duplicates), filtered ? [1, 0] : [2, 1]);
+    assert.deepEqual(
+      result.perHost.map((host) => host.duplicates),
+      filtered ? [1, 0] : [2, 1],
+    );
     const independent = result.transcripts.find((transcript) => transcript.path === independentPath);
     const a = result.transcripts.find((transcript) => transcript.nativeId === "a-native");
     const b = result.transcripts.find((transcript) => transcript.nativeId === "b-native");
@@ -361,7 +390,10 @@ for (const filtered of [false, true]) {
     assert.equal(folded.instructions[0].harmSessions, 2);
     const ledger = { version: 1, entries: {} };
     recordGapObservations(ledger, records);
-    assert.deepEqual(Object.keys(Object.values(ledger.entries)[0].sessions).sort(), [independent.identity, a.identity].sort());
+    assert.deepEqual(
+      Object.keys(Object.values(ledger.entries)[0].sessions).sort(),
+      [independent.identity, a.identity].sort(),
+    );
     const persisted = foldEvidence(records, {
       minGapEvidence: 2,
       gapObservations: ledgerGapObservations(ledger, "AGENTS.md"),
@@ -389,7 +421,14 @@ for (const remoteOnly of [false, true]) {
         const rootName = "2026-08-27T00-00-00.000Z_root";
         const familyDirectory = path.join(firstHome, familyStore, "agent", "sessions", "-repo-demo");
         const independentStore = familyStore === ".omp" ? ".pi" : ".omp";
-        const independentPath = path.join(firstHome, independentStore, "agent", "sessions", "-repo-demo", "split-root.jsonl");
+        const independentPath = path.join(
+          firstHome,
+          independentStore,
+          "agent",
+          "sessions",
+          "-repo-demo",
+          "split-root.jsonl",
+        );
         const familyPath = path.join(familyDirectory, `${rootName}.jsonl`);
         const childPath = path.join(familyDirectory, rootName, "Child.jsonl");
         const copiedDirectory = path.join(secondHome, ".omp", "agent", "sessions", "-repo-demo");
@@ -531,9 +570,7 @@ for (const remoteOnly of [false, true]) {
         assert.equal(child.interactionSignals.source, "subagent");
         assert.equal(child.interaction, NON_INTERACTIVE);
         assert.equal(grandchild.interaction, NON_INTERACTIVE);
-        const familyIdentity = missingFirstRoot
-          ? child.identity
-          : child.corroborationIdentity;
+        const familyIdentity = missingFirstRoot ? child.identity : child.corroborationIdentity;
         assert.equal(grandchild.corroborationIdentity, familyIdentity);
         assert.equal(independent.corroborationIdentity, independent.identity);
         assert.notEqual(independent.identity, familyIdentity);
@@ -630,26 +667,29 @@ test("filtered OMP roots still share one cross-host gap and harm observer", asyn
       assert.equal(transcript.corroborationStartedAt, old);
       assert.equal(transcript.interaction, NON_INTERACTIVE);
     }
-    const recordsFor = (transcripts) => transcripts.map((transcript) => ({
-      status: "ok",
-      memoryPath: "AGENTS.md",
-      transcript,
-      negative: [{ instruction: "db-rule", class: "harm", quote: "following the rule caused damage" }],
-      gaps: [{
-        proposedInstruction: "Read docs/db.md before writing queries.",
-        mistake: "re-derived the schema",
-        quote: "read the schema",
-        recurrenceRisk: "high",
-        domain: "project",
-      }],
-    }));
+    const recordsFor = (transcripts) =>
+      transcripts.map((transcript) => ({
+        status: "ok",
+        memoryPath: "AGENTS.md",
+        transcript,
+        negative: [{ instruction: "db-rule", class: "harm", quote: "following the rule caused damage" }],
+        gaps: [
+          {
+            proposedInstruction: "Read docs/db.md before writing queries.",
+            mistake: "re-derived the schema",
+            quote: "read the schema",
+            recurrenceRisk: "high",
+            domain: "project",
+          },
+        ],
+      }));
     const records = recordsFor(result.transcripts);
     const folded = foldEvidence(records, { minGapEvidence: 2 });
     assert.equal(folded.gaps.length, 0);
     assert.equal(folded.totals.droppedGapSingletons, 1);
     assert.equal(folded.instructions[0].harmSessions, 1);
     const ledger = { version: 1, entries: {} };
-    recordGapObservations(ledger, records, { now });
+    recordGapObservations(ledger, records, { now: new Date(now) });
     assert.equal(Object.keys(Object.values(ledger.entries)[0].sessions).length, 1);
     const persisted = foldEvidence(records, {
       minGapEvidence: 2,
@@ -708,7 +748,10 @@ test("remote nested OMP automation is non-interactive without readable ancestor 
       discovery: { hosts: ["mac-home"], harnesses: ["pi"], since: "all", includeOmp: true },
     }),
   );
-  for (const [childId, rootId] of [["child-native", "root-native"], ["grandchild-native", "other-root-native"]]) {
+  for (const [childId, rootId] of [
+    ["child-native", "root-native"],
+    ["grandchild-native", "other-root-native"],
+  ]) {
     const child = refreshed.transcripts.find((transcript) => transcript.nativeId === childId);
     const root = refreshed.transcripts.find((transcript) => transcript.nativeId === rootId);
     assert.equal(child.parentSessionId, rootId);

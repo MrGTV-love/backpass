@@ -147,30 +147,49 @@ test("current records and legacy gap observations share one label per session", 
 
 test("direct fold rejects a selected representative's inconsistent historical observer before clustering", () => {
   const gap = "Read database documentation before writing queries.";
-  const current = (id, observer) => record(id, {
-    transcript: {
-      id, identity: id, nativeId: id, harness: "pi", corroborationIdentity: observer,
-      startedAt: Date.parse("2026-08-01T00:00:00Z"),
-    },
-    negative: [{ instruction: "AG-001", quote: `current mistake ${id}`, class: "non-compliance" }],
-  });
+  const current = (id, observer) =>
+    record(id, {
+      transcript: {
+        id,
+        identity: id,
+        nativeId: id,
+        harness: "pi",
+        corroborationIdentity: observer,
+        startedAt: Date.parse("2026-08-01T00:00:00Z"),
+      },
+      negative: [{ instruction: "AG-001", quote: `current mistake ${id}`, class: "non-compliance" }],
+    });
   const historical = {
-    proposedInstruction: gap, sessionId: "P", sourceSessionId: "G", sightingIds: ["P", "G"],
-    source: "pi · G · 2026-08-01", quote: "historical G quote",
+    proposedInstruction: gap,
+    sessionId: "P",
+    sourceSessionId: "G",
+    sightingIds: ["P", "G"],
+    source: "pi · G · 2026-08-01",
+    quote: "historical G quote",
     sightingQuotes: ["historical P quote", "historical G quote"],
   };
   const independent = {
-    proposedInstruction: gap, sessionId: "X", sourceSessionId: "X", sightingIds: ["X"],
-    source: "pi · X · 2026-08-01", quote: "independent X quote",
+    proposedInstruction: gap,
+    sessionId: "X",
+    sourceSessionId: "X",
+    sightingIds: ["X"],
+    source: "pi · X · 2026-08-01",
+    quote: "independent X quote",
   };
   const route = { weight: null, rootPath: "AGENTS.md", ownerOf: () => null };
   for (const matchingGap of [false, true]) {
     const fresh = {
-      proposedInstruction: gap, sessionId: "L", sourceSessionId: "G", sightingIds: ["G"],
-      source: historical.source, quote: "fresh G quote",
+      proposedInstruction: gap,
+      sessionId: "L",
+      sourceSessionId: "G",
+      sightingIds: ["G"],
+      source: historical.source,
+      quote: "fresh G quote",
     };
     const summary = foldEvidence([current("P", "P"), current("G", "L"), current("X", "X")], {
-      minGapEvidence: 2, memoryFile, route,
+      minGapEvidence: 2,
+      memoryFile,
+      route,
       gapObservations: [historical, independent, ...(matchingGap ? [fresh] : [])],
     });
     assert.equal(summary.sourceObservers[historical.source], "L");
@@ -180,81 +199,112 @@ test("direct fold rejects a selected representative's inconsistent historical ob
     if (matchingGap) {
       assert.equal(summary.gaps[0].sessions, 2);
       assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), [
-        "fresh G quote", "independent X quote",
+        "fresh G quote",
+        "independent X quote",
       ]);
     }
     assert.ok(!summary.rootOwnedGaps.flat().some((item) => item.sessionId === "P"));
   }
   const ambiguous = foldEvidence([current("G", "L"), current("G", "M")], {
-    gapObservations: [{ ...historical, sessionId: "L" }, independent], minGapEvidence: 2,
+    gapObservations: [{ ...historical, sessionId: "L" }, independent],
+    minGapEvidence: 2,
   });
   assert.equal(ambiguous.totals.gapSightings, 1);
   assert.deepEqual(ambiguous.gaps, []);
 
   for (const representativeSelected of [false, true]) {
-    const summary = foldEvidence([
-      current("P", "P"), current("X", "X"), ...(representativeSelected ? [current("G", "L")] : []),
-    ], {
-      gapObservations: [{ ...historical, sessionId: representativeSelected ? "L" : "P" }, independent],
-      minGapEvidence: 2, route: {
-        ...route, ownerOf: (ids) => ids.includes("P") ? null : "apps/api/AGENTS.md",
+    const summary = foldEvidence(
+      [current("P", "P"), current("X", "X"), ...(representativeSelected ? [current("G", "L")] : [])],
+      {
+        gapObservations: [{ ...historical, sessionId: representativeSelected ? "L" : "P" }, independent],
+        minGapEvidence: 2,
+        route: {
+          ...route,
+          ownerOf: (ids) => (ids.includes("P") ? null : "apps/api/AGENTS.md"),
+        },
       },
-    });
+    );
     assert.equal(summary.gaps[0].sessions, 2);
     assert.equal(summary.sourceObservers[historical.source], representativeSelected ? "L" : "P");
     assert.equal(summary.sourceSessions[historical.source], "G");
-    assert.deepEqual(new Set(summary.rootOwnedGaps.flat().map((item) => item.quote)),
-      new Set([...historical.sightingQuotes, independent.quote]));
+    assert.deepEqual(
+      new Set(summary.rootOwnedGaps.flat().map((item) => item.quote)),
+      new Set([...historical.sightingQuotes, independent.quote]),
+    );
   }
 });
 
 test("direct fold resolves retained native aliases without admitting incompatible occupied observers", () => {
   const gap = "Read database documentation before writing queries.";
-  const current = (id, observer) => record(id, {
-    transcript: {
-      id, identity: id, nativeId: id, harness: "pi", corroborationIdentity: observer,
-      startedAt: Date.parse("2026-08-01T00:00:00Z"),
-    },
-  });
+  const current = (id, observer) =>
+    record(id, {
+      transcript: {
+        id,
+        identity: id,
+        nativeId: id,
+        harness: "pi",
+        corroborationIdentity: observer,
+        startedAt: Date.parse("2026-08-01T00:00:00Z"),
+      },
+    });
   const historical = {
-    proposedInstruction: gap, sessionId: "P", sourceSessionId: "G", sightingIds: ["P", "G"],
-    source: "pi · G · 2026-08-01", quote: "historical G quote",
+    proposedInstruction: gap,
+    sessionId: "P",
+    sourceSessionId: "G",
+    sightingIds: ["P", "G"],
+    source: "pi · G · 2026-08-01",
+    quote: "historical G quote",
     sightingQuotes: ["historical P quote", "historical G quote"],
   };
   const native = {
-    proposedInstruction: gap, sessionId: "H", sourceSessionId: "H", sightingIds: ["H"],
-    source: "pi · H · 2026-08-01", quote: "valid H quote", domain: "orchestration",
+    proposedInstruction: gap,
+    sessionId: "H",
+    sourceSessionId: "H",
+    sightingIds: ["H"],
+    source: "pi · H · 2026-08-01",
+    quote: "valid H quote",
+    domain: "orchestration",
   };
   const independent = {
-    proposedInstruction: gap, sessionId: "X", sourceSessionId: "X", sightingIds: ["X"],
-    source: "pi · X · 2026-08-01", quote: "valid X quote",
+    proposedInstruction: gap,
+    sessionId: "X",
+    sourceSessionId: "X",
+    sightingIds: ["X"],
+    source: "pi · X · 2026-08-01",
+    quote: "valid X quote",
   };
   const duplicate = { ...native, quote: "second valid H quote", domain: "project" };
-  const summary = foldEvidence([
-    current("P", "P"), current("G", "L"), current("H", "P"), current("X", "X"),
-  ], {
+  const summary = foldEvidence([current("P", "P"), current("G", "L"), current("H", "P"), current("X", "X")], {
     minGapEvidence: 2,
     gapObservations: [historical, native, duplicate, independent],
     route: { weight: null, rootPath: "AGENTS.md", ownerOf: () => null },
   });
   assert.equal(summary.gaps[0].sessions, 2);
-  assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), [
-    "valid H quote", "valid X quote",
-  ]);
+  assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), ["valid H quote", "valid X quote"]);
   assert.equal(summary.sourceObservers[native.source], "P");
   assert.equal(summary.sourceSessions[native.source], "H");
-  assert.deepEqual(new Set(summary.rootOwnedGaps.flat().filter((item) => item.sessionId === "P").map((item) => item.quote)),
-    new Set(["valid H quote", "second valid H quote"]));
+  assert.deepEqual(
+    new Set(
+      summary.rootOwnedGaps
+        .flat()
+        .filter((item) => item.sessionId === "P")
+        .map((item) => item.quote),
+    ),
+    new Set(["valid H quote", "second valid H quote"]),
+  );
   const singleton = foldEvidence([current("H", "P")], {
-    minGapEvidence: 2, gapObservations: [native, duplicate],
+    minGapEvidence: 2,
+    gapObservations: [native, duplicate],
   });
   assert.deepEqual(singleton.gaps, []);
   assert.equal(singleton.totals.droppedGapSingletons, 1);
   const api = foldEvidence([current("H", "P"), current("X", "X")], {
-    minGapEvidence: 2, gapObservations: [native, independent],
+    minGapEvidence: 2,
+    gapObservations: [native, independent],
     route: {
-      weight: "apps/api/AGENTS.md", rootPath: "AGENTS.md",
-      ownerOf: (ids) => ids.every((id) => id === "H" || id === "X") ? "apps/api/AGENTS.md" : null,
+      weight: "apps/api/AGENTS.md",
+      rootPath: "AGENTS.md",
+      ownerOf: (ids) => (ids.every((id) => id === "H" || id === "X") ? "apps/api/AGENTS.md" : null),
     },
   });
   assert.equal(api.gaps[0].sessions, 2);
@@ -263,27 +313,42 @@ test("direct fold resolves retained native aliases without admitting incompatibl
 
 test("direct fold resolves source-qualified collision records to one validated observer", () => {
   const gap = "Read database documentation before writing queries.";
-  const current = (id, observer) => record(id, {
-    transcript: {
-      id, identity: id, nativeId: id, harness: "pi", corroborationIdentity: observer,
-      startedAt: Date.parse("2026-08-01T00:00:00Z"),
-    },
-  });
+  const current = (id, observer) =>
+    record(id, {
+      transcript: {
+        id,
+        identity: id,
+        nativeId: id,
+        harness: "pi",
+        corroborationIdentity: observer,
+        startedAt: Date.parse("2026-08-01T00:00:00Z"),
+      },
+    });
   const fresh = {
-    proposedInstruction: gap, sessionId: JSON.stringify(["P", "P"]),
-    sourceSessionId: "P", sightingIds: ["P"], source: "pi · P · 2026-08-01", quote: "fresh P quote",
+    proposedInstruction: gap,
+    sessionId: JSON.stringify(["P", "P"]),
+    sourceSessionId: "P",
+    sightingIds: ["P"],
+    source: "pi · P · 2026-08-01",
+    quote: "fresh P quote",
   };
   const independent = {
-    proposedInstruction: gap, sessionId: "X", sourceSessionId: "X", sightingIds: ["X"],
-    source: "pi · X · 2026-08-01", quote: "fresh X quote",
+    proposedInstruction: gap,
+    sessionId: "X",
+    sourceSessionId: "X",
+    sightingIds: ["X"],
+    source: "pi · X · 2026-08-01",
+    quote: "fresh X quote",
   };
   const summary = foldEvidence([current("P", "P"), current("X", "X")], {
-    gapObservations: [fresh, independent], minGapEvidence: 2,
+    gapObservations: [fresh, independent],
+    minGapEvidence: 2,
   });
   assert.equal(summary.gaps[0].sessions, 2);
   assert.equal(summary.sourceObservers[fresh.source], "P");
   const singleton = foldEvidence([current("P", "P")], {
-    gapObservations: [fresh, { ...fresh, sessionId: "P" }], minGapEvidence: 2,
+    gapObservations: [fresh, { ...fresh, sessionId: "P" }],
+    minGapEvidence: 2,
   });
   assert.deepEqual(singleton.gaps, []);
   assert.equal(singleton.totals.droppedGapSingletons, 1);
@@ -726,10 +791,7 @@ test("OMP subagents share corroboration while relevance remains per file", () =>
   const oneObserver = new Map(parentAndChild.instructions.map((row) => [row.instruction, row]));
   assert.equal(parentAndChild.gaps.length, 0, "parent and subagent cannot clear the two-session floor");
   assert.equal(parentAndChild.totals.droppedGapSingletons, 1);
-  assert.deepEqual(parentAndChild.sources, [
-    "pi · parent-native · 2026-08-01",
-    "pi · child-native · 2026-08-02",
-  ]);
+  assert.deepEqual(parentAndChild.sources, ["pi · parent-native · 2026-08-01", "pi · child-native · 2026-08-02"]);
   assert.deepEqual(Object.values(parentAndChild.sourceObservers), ["pi-parent-session", "pi-parent-session"]);
   assert.equal(oneObserver.get("AG-001").harmSessions, 1);
   assert.equal(oneObserver.get("AG-002").nonComplianceSessions, 1);

@@ -626,14 +626,16 @@ test("native OMP quote labels still measure one proposal observer per root", () 
     const result = gate({
       edit: memoryEdit(REWRITE_SHAPES["append a sentence"]),
       annotation: {
-        edits: [claim(["H1"], {
-          kind: "rewrite",
-          evidence: summary.instructions[0].quotes.map((quote) => ({
-            polarity: "negative",
-            text: quote.text,
-            source: quote.source,
-          })),
-        })],
+        edits: [
+          claim(["H1"], {
+            kind: "rewrite",
+            evidence: summary.instructions[0].quotes.map((quote) => ({
+              polarity: "negative",
+              text: quote.text,
+              source: quote.source,
+            })),
+          }),
+        ],
       },
       context: { summary },
     });
@@ -642,9 +644,7 @@ test("native OMP quote labels still measure one proposal observer per root", () 
       assert.equal(result.proposal.edits[0].transcripts, 2);
     } else {
       assert.equal(result.proposal.edits.length, 0);
-      assert.ok(
-        result.violations.some((violation) => /backed by 1 session\(s\); 2 are required/.test(violation)),
-      );
+      assert.ok(result.violations.some((violation) => /backed by 1 session\(s\); 2 are required/.test(violation)));
     }
   }
 });
@@ -656,7 +656,10 @@ test("shared observer gap sightings do not widen native ownership of unrelated q
     status: "ok",
     memoryPath: "AGENTS.md",
     transcript: {
-      id, identity: id, nativeId: id, harness: "pi",
+      id,
+      identity: id,
+      nativeId: id,
+      harness: "pi",
       startedAt: Date.parse("2026-08-02T00:00:00Z"),
       corroborationIdentity: observer,
       interaction: "non-interactive",
@@ -682,31 +685,60 @@ test("shared observer gap sightings do not widen native ownership of unrelated q
   const route = routingFor([api], attribution, "AGENTS.md", null);
   const summary = foldEvidence([a, c], { gapObservations: observations, route });
   const apiEvidence = summary.instructions[0].quotes.map((quote) => ({
-    polarity: "negative", text: quote.text, source: quote.source,
+    polarity: "negative",
+    text: quote.text,
+    source: quote.source,
   }));
   assert.equal(summary.sourceSessions[shared.source], a.transcript.identity);
   assert.equal(summary.sourceObservers[shared.source], "observer-r");
-  assert.equal(foldEvidence([], { gapObservations: observations, route }).sourceSessions[shared.source], a.transcript.identity);
+  assert.equal(
+    foldEvidence([], { gapObservations: observations, route }).sourceSessions[shared.source],
+    a.transcript.identity,
+  );
   assert.equal(summary.gaps[0].sessions, 2);
   assert.equal(summary.instructions[0].harmSessions, 2);
-  assert.equal(rootOwnsGap(apiEvidence.map((quote) => ({
-    sessionId: summary.sourceObservers[quote.source], quote: quote.text,
-  })), summary.rootOwnedGaps), false);
-  assert.equal(foldEvidence([a, c], {
-    gapObservations: observations, route: { ...route, weight: api.path },
-  }).gaps.length, 0);
+  assert.equal(
+    rootOwnsGap(
+      apiEvidence.map((quote) => ({
+        sessionId: summary.sourceObservers[quote.source],
+        quote: quote.text,
+      })),
+      summary.rootOwnedGaps,
+    ),
+    false,
+  );
+  assert.equal(
+    foldEvidence([a, c], {
+      gapObservations: observations,
+      route: { ...route, weight: api.path },
+    }).gaps.length,
+    0,
+  );
   const propose = (memoryPath, instruction, evidence) => {
     const repo = makeRepo({ "AGENTS.md": MEMORY_TEXT, [api.path]: MEMORY_TEXT });
     const staged = stageAndMeasure({
-      repo, memoryPath,
+      repo,
+      memoryPath,
       edit: (root) => writeIn(root, memoryPath, (text) => `${text}- ${instruction}\n`),
     });
-    return buildProposal({
-      edits: [claim(staged.measured.changes.map((change) => change.id), { kind: "add", evidence })],
-    }, {
-      repo, memoryFile: staged.memoryFile, measured: staged.measured, config: config(), summary,
-      routing: { ...route, weight: memoryPath === "AGENTS.md" ? null : memoryPath },
-    });
+    return buildProposal(
+      {
+        edits: [
+          claim(
+            staged.measured.changes.map((change) => change.id),
+            { kind: "add", evidence },
+          ),
+        ],
+      },
+      {
+        repo,
+        memoryFile: staged.memoryFile,
+        measured: staged.measured,
+        config: config(),
+        summary,
+        routing: { ...route, weight: memoryPath === "AGENTS.md" ? null : memoryPath },
+      },
+    );
   };
   const wrongRoot = propose("AGENTS.md", apiAddition, apiEvidence);
   assert.equal(wrongRoot.proposal.edits.length, 0);
@@ -716,7 +748,9 @@ test("shared observer gap sightings do not widen native ownership of unrelated q
   assert.equal(apiResult.proposal.edits.length, 1);
   assert.equal(apiResult.proposal.edits[0].transcripts, 2);
   const gapEvidence = observations.map((observation) => ({
-    polarity: "negative", text: observation.quote, source: observation.source,
+    polarity: "negative",
+    text: observation.quote,
+    source: observation.source,
   }));
   const rootGap = propose("AGENTS.md", sharedGap, gapEvidence);
   assert.deepEqual(rootGap.violations, []);
@@ -765,10 +799,7 @@ test("unknown historical gaps preserve current native attribution for unrelated 
   mergeGapEntries(ledger, [[knownId, unknownId]]);
   recordGapObservations(ledger, [a]);
   const observations = ledgerGapObservations(ledger, "AGENTS.md");
-  assert.equal(
-    observations.find((observation) => observation.sessionId === "observer-a").unattributedSightings,
-    true,
-  );
+  assert.equal(observations.find((observation) => observation.sessionId === "observer-a").unattributedSightings, true);
   const api = { path: "apps/api/AGENTS.md", dir: "apps/api" };
   const attribution = new Map([
     [a.transcript.identity, ["apps/api/a.ts"]],
@@ -791,7 +822,14 @@ test("unknown historical gaps preserve current native attribution for unrelated 
       edit: (root) => writeIn(root, memoryPath, (text) => `${text}- ${instruction}\n`),
     });
     return buildProposal(
-      { edits: [claim(staged.measured.changes.map((change) => change.id), { kind: "add", evidence })] },
+      {
+        edits: [
+          claim(
+            staged.measured.changes.map((change) => change.id),
+            { kind: "add", evidence },
+          ),
+        ],
+      },
       {
         repo,
         memoryFile: staged.memoryFile,
@@ -818,9 +856,7 @@ test("unknown historical gaps preserve current native attribution for unrelated 
   assert.equal(rootGap.proposal.edits[0].transcripts, 2);
   const launderedGap = propose(api.path, deployment, gapEvidence);
   assert.equal(launderedGap.proposal.edits.length, 0);
-  assert.ok(
-    launderedGap.violations.some((violation) => /cross-cutting evidence belongs in AGENTS.md/.test(violation)),
-  );
+  assert.ok(launderedGap.violations.some((violation) => /cross-cutting evidence belongs in AGENTS.md/.test(violation)));
   assert.equal(
     foldEvidence([a, b], {
       gapObservations: observations,
