@@ -10,6 +10,7 @@ import {
   disambiguateSourceLabels,
   gapSource,
   normalizeSourceLabel,
+  resolveGapObservationObserver,
 } from "./gap-ledger.js";
 import { crossSurfaceDuplicates } from "./overlap.js";
 import { corroborationIdentityOf } from "./transcript.js";
@@ -110,10 +111,15 @@ export function foldEvidence(
     if (!observersByNative.has(nativeIdentity)) observersByNative.set(nativeIdentity, new Set());
     observersByNative.get(nativeIdentity).add(corroborationIdentityOf(record.transcript));
   }
-  const persistedObservations = (gapObservations ?? []).filter((observation) => {
-    const observers = observersByNative.get(observation?.sourceSessionId);
-    return !observers || (observers.size === 1 && observers.has(observation?.sessionId));
-  });
+  const persistedObservations = (gapObservations ?? [])
+    .map((observation) => {
+      const sessionId = resolveGapObservationObserver(observation, observersByNative);
+      return sessionId && sessionId !== observation.sessionId ? { ...observation, sessionId } : observation;
+    })
+    .filter((observation) => {
+      const observers = observersByNative.get(observation?.sourceSessionId);
+      return !observers || (observers.size === 1 && observers.has(observation?.sessionId));
+    });
   const issuedSources = disambiguateSourceLabels([
     ...usable.map((record) => ({
       source: gapSource(record.transcript),
@@ -376,13 +382,10 @@ export function foldEvidence(
     summary.routedGaps = routedGaps;
     summary.sourceSessions = sourceIdentitiesOf(issuedSources, [
       ...usable.map((record) => [record.transcript.identity || record.transcript.id]),
-      ...persistedObservations.map((observation) => [observation?.sourceSessionId || observation?.sessionId]),
+      ...persistedObservations.map((observation) =>
+        observation?.unattributedSightings ? [] : [observation?.sourceSessionId || observation?.sessionId],
+      ),
     ]);
-    for (const [index, observation] of persistedObservations.entries()) {
-      if (observation?.unattributedSightings) {
-        delete summary.sourceSessions[normalizeSourceLabel(observationSources[index])];
-      }
-    }
   }
   return summary;
 }

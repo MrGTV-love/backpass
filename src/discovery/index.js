@@ -259,14 +259,16 @@ function dropCrossHostDuplicates(transcripts) {
   const seen = new Map();
   const drops = new Map();
   const observerAliases = new Map();
+  const observerCorrespondences = new Map();
   const canonicalObserver = (identity) => {
     while (observerAliases.has(identity)) identity = observerAliases.get(identity);
     return identity;
   };
   const aliasObserver = (observer, retainedObserver) => {
+    const canonical = canonicalObserver(observer);
     const retained = canonicalObserver(retainedObserver);
-    if (observer !== retained && !observerAliases.has(observer)) {
-      observerAliases.set(observer, retained);
+    if (canonical !== retained) {
+      observerAliases.set(canonical, retained);
     }
   };
   let write = 0;
@@ -283,6 +285,10 @@ function dropCrossHostDuplicates(transcripts) {
           (previous.harness === "pi" && previous.interactionSignals.source === "subagent"))
       ) {
         aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
+        const observerKey = `${transcript.harness}\n${transcript.corroborationNativeId}`;
+        const retainedObserverKey = `${previous.harness}\n${previous.corroborationNativeId}`;
+        if (!observerCorrespondences.has(observerKey)) observerCorrespondences.set(observerKey, previous);
+        if (!observerCorrespondences.has(retainedObserverKey)) observerCorrespondences.set(retainedObserverKey, previous);
       }
       continue;
     }
@@ -291,13 +297,14 @@ function dropCrossHostDuplicates(transcripts) {
     write += 1;
   }
   transcripts.length = write;
-  const observers = new Map();
+  const observers = new Map(observerCorrespondences);
   for (const transcript of transcripts) {
     const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
     const previous = observers.get(key);
     if (
       !previous ||
-      (previous.host === (transcript.host || null) && !previous.parentSessionId && transcript.parentSessionId)
+      (!observerCorrespondences.has(key) &&
+        previous.host === (transcript.host || null) && !previous.parentSessionId && transcript.parentSessionId)
     ) {
       observers.set(key, transcript);
     }
@@ -305,7 +312,7 @@ function dropCrossHostDuplicates(transcripts) {
   for (const transcript of transcripts) {
     const key = `${transcript.harness}\n${transcript.corroborationNativeId}`;
     const previous = observers.get(key);
-    if (previous.host !== (transcript.host || null)) {
+    if (previous.host !== (transcript.host || null) && !observerAliases.has(transcript.corroborationIdentity)) {
       aliasObserver(transcript.corroborationIdentity, previous.corroborationIdentity);
     }
   }

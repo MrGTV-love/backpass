@@ -15,7 +15,7 @@ import {
   SHRINK_MAX_EDITS,
 } from "../src/proposal.js";
 import { foldEvidence, renderEvidenceForPrompt, renderEvidenceReport } from "../src/fold.js";
-import { ledgerGapObservations, recordGapObservations } from "../src/gap-ledger.js";
+import { ledgerGapObservations, mergeGapEntries, recordGapObservations } from "../src/gap-ledger.js";
 import { rootOwnsGap, routingFor } from "../src/nested.js";
 import { estimateTokens } from "../src/tokens.js";
 import { loadProjectSkills, skillDescriptionTokens } from "../src/skills.js";
@@ -724,6 +724,110 @@ test("shared observer gap sightings do not widen native ownership of unrelated q
   const launderedGap = propose(api.path, sharedGap, gapEvidence);
   assert.equal(launderedGap.proposal.edits.length, 0);
   assert.ok(launderedGap.violations.some((violation) => /cross-cutting evidence belongs in AGENTS.md/.test(violation)));
+});
+
+test("unknown historical gaps preserve current native attribution for unrelated API quotes", () => {
+  const deployment = "Check deployment permissions before releasing services.";
+  const apiAddition = "Validate the API schema before adding a handler.";
+  const observed = (id, observer) => ({
+    status: "ok",
+    memoryPath: "AGENTS.md",
+    transcript: {
+      id,
+      identity: id,
+      nativeId: id,
+      harness: "pi",
+      startedAt: Date.parse("2026-08-02T00:00:00Z"),
+      corroborationIdentity: observer,
+      interaction: "non-interactive",
+    },
+    negative: [{ instruction: "AG-001", quote: `API schema mismatch in handler ${id}`, class: "harm" }],
+    gaps: [{ proposedInstruction: deployment, quote: `deployment mistake ${id}`, recurrenceRisk: "high" }],
+  });
+  const a = observed("native-a", "observer-a");
+  const b = observed("native-b", "observer-b");
+  const ledger = { version: 1, entries: {} };
+  recordGapObservations(ledger, [a, b]);
+  const knownId = Object.keys(ledger.entries)[0];
+  const unknownId = "f".repeat(16);
+  ledger.entries[unknownId] = {
+    id: unknownId,
+    memoryPath: "AGENTS.md",
+    proposedInstruction: "Legacy deployment phrasing.",
+    sessions: {
+      "observer-a": {
+        source: "legacy deployment source",
+        quote: "unknown deployment mistake",
+        observedAt: "2026-08-01T00:00:00Z",
+      },
+    },
+  };
+  mergeGapEntries(ledger, [[knownId, unknownId]]);
+  recordGapObservations(ledger, [a]);
+  const observations = ledgerGapObservations(ledger, "AGENTS.md");
+  assert.equal(
+    observations.find((observation) => observation.sessionId === "observer-a").unattributedSightings,
+    true,
+  );
+  const api = { path: "apps/api/AGENTS.md", dir: "apps/api" };
+  const attribution = new Map([
+    [a.transcript.identity, ["apps/api/a.ts"]],
+    [b.transcript.identity, ["apps/api/b.ts"]],
+  ]);
+  const route = routingFor([api], attribution, "AGENTS.md", null);
+  const summary = foldEvidence([a, b], { gapObservations: observations, route });
+  const apiEvidence = summary.instructions[0].quotes.map((quote) => ({
+    polarity: "negative",
+    text: quote.text,
+    source: quote.source,
+  }));
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.equal(summary.instructions[0].harmSessions, 2);
+  const propose = (memoryPath, instruction, evidence) => {
+    const repo = makeRepo({ "AGENTS.md": MEMORY_TEXT, [api.path]: MEMORY_TEXT });
+    const staged = stageAndMeasure({
+      repo,
+      memoryPath,
+      edit: (root) => writeIn(root, memoryPath, (text) => `${text}- ${instruction}\n`),
+    });
+    return buildProposal(
+      { edits: [claim(staged.measured.changes.map((change) => change.id), { kind: "add", evidence })] },
+      {
+        repo,
+        memoryFile: staged.memoryFile,
+        measured: staged.measured,
+        config: config(),
+        summary,
+        routing: { ...route, weight: memoryPath === "AGENTS.md" ? null : memoryPath },
+      },
+    );
+  };
+  const apiResult = propose(api.path, apiAddition, apiEvidence);
+  assert.deepEqual(apiResult.violations, []);
+  assert.equal(apiResult.proposal.edits[0].transcripts, 2);
+  const wrongRoot = propose("AGENTS.md", apiAddition, apiEvidence);
+  assert.equal(wrongRoot.proposal.edits.length, 0);
+  assert.ok(wrongRoot.violations.some((violation) => /belongs in apps\/api\/AGENTS.md/.test(violation)));
+  const gapEvidence = observations.map((observation) => ({
+    polarity: "negative",
+    text: observation.quote,
+    source: observation.source,
+  }));
+  const rootGap = propose("AGENTS.md", deployment, gapEvidence);
+  assert.deepEqual(rootGap.violations, []);
+  assert.equal(rootGap.proposal.edits[0].transcripts, 2);
+  const launderedGap = propose(api.path, deployment, gapEvidence);
+  assert.equal(launderedGap.proposal.edits.length, 0);
+  assert.ok(
+    launderedGap.violations.some((violation) => /cross-cutting evidence belongs in AGENTS.md/.test(violation)),
+  );
+  assert.equal(
+    foldEvidence([a, b], {
+      gapObservations: observations,
+      route: { ...route, weight: api.path },
+    }).gaps.length,
+    0,
+  );
 });
 
 test("on the r1 dry-run corpus, only the edit whose second source was never issued is refused", () => {

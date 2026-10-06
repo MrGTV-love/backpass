@@ -5,6 +5,7 @@ import {
   normalizeGapLedgerSessions,
   pruneGapLedger,
   recordGapObservations,
+  resolveGapObservationObserver,
 } from "../gap-ledger.js";
 import { synthesizeProposal } from "../synthesize.js";
 import { ProposalViolation } from "../proposal.js";
@@ -59,6 +60,8 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
     const identities = identitiesByLegacyId.get(transcript.id);
     if (identities?.size === 1 && identities.has(transcriptIdentity(transcript))) {
       legacyIds.add(transcript.id);
+      if (!selectedObserversByNative.has(transcript.id)) selectedObserversByNative.set(transcript.id, new Set());
+      selectedObserversByNative.get(transcript.id).add(corroborationIdentityOf(transcript));
     }
   }
   const relevant = [];
@@ -85,7 +88,7 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
 
   const ledger = state.readGapLedger();
   normalizeGapLedgerSessions(ledger, transcripts, { legacyIds });
-  recordGapObservations(ledger, relevant, { skills, legacyIds });
+  recordGapObservations(ledger, relevant, { skills, legacyIds, transcripts });
   // Consolidate after recording, so the pass sees this run's sightings too: two
   // sessions coining the same brand-new gap in one parallel fan-out can only line up
   // here. One bounded judged call; a failure degrades to lexical identity and the run
@@ -102,7 +105,10 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
   pruneGapLedger(ledger, { memoryFile, memoryPath: memoryFile.path, skills, maxAge: gapLedgerMaxAge });
   state.writeGapLedger(ledger);
 
-  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills).filter((observation) => {
+  const gapObservations = ledgerGapObservations(ledger, memoryFile.path, skills).map((observation) => ({
+    ...observation,
+    sessionId: resolveGapObservationObserver(observation, selectedObserversByNative) ?? observation.sessionId,
+  })).filter((observation) => {
     if (!selectedGapSessions.has(observation.sessionId)) return false;
     const observers = selectedObserversByNative.get(observation.sourceSessionId);
     return !observers || (observers.size === 1 && observers.has(observation.sessionId));

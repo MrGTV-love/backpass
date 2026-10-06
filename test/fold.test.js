@@ -208,6 +208,87 @@ test("direct fold rejects a selected representative's inconsistent historical ob
   }
 });
 
+test("direct fold resolves retained native aliases without admitting incompatible occupied observers", () => {
+  const gap = "Read database documentation before writing queries.";
+  const current = (id, observer) => record(id, {
+    transcript: {
+      id, identity: id, nativeId: id, harness: "pi", corroborationIdentity: observer,
+      startedAt: Date.parse("2026-08-01T00:00:00Z"),
+    },
+  });
+  const historical = {
+    proposedInstruction: gap, sessionId: "P", sourceSessionId: "G", sightingIds: ["P", "G"],
+    source: "pi · G · 2026-08-01", quote: "historical G quote",
+    sightingQuotes: ["historical P quote", "historical G quote"],
+  };
+  const native = {
+    proposedInstruction: gap, sessionId: "H", sourceSessionId: "H", sightingIds: ["H"],
+    source: "pi · H · 2026-08-01", quote: "valid H quote", domain: "orchestration",
+  };
+  const independent = {
+    proposedInstruction: gap, sessionId: "X", sourceSessionId: "X", sightingIds: ["X"],
+    source: "pi · X · 2026-08-01", quote: "valid X quote",
+  };
+  const duplicate = { ...native, quote: "second valid H quote", domain: "project" };
+  const summary = foldEvidence([
+    current("P", "P"), current("G", "L"), current("H", "P"), current("X", "X"),
+  ], {
+    minGapEvidence: 2,
+    gapObservations: [historical, native, duplicate, independent],
+    route: { weight: null, rootPath: "AGENTS.md", ownerOf: () => null },
+  });
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), [
+    "valid H quote", "valid X quote",
+  ]);
+  assert.equal(summary.sourceObservers[native.source], "P");
+  assert.equal(summary.sourceSessions[native.source], "H");
+  assert.deepEqual(new Set(summary.rootOwnedGaps.flat().filter((item) => item.sessionId === "P").map((item) => item.quote)),
+    new Set(["valid H quote", "second valid H quote"]));
+  const singleton = foldEvidence([current("H", "P")], {
+    minGapEvidence: 2, gapObservations: [native, duplicate],
+  });
+  assert.deepEqual(singleton.gaps, []);
+  assert.equal(singleton.totals.droppedGapSingletons, 1);
+  const api = foldEvidence([current("H", "P"), current("X", "X")], {
+    minGapEvidence: 2, gapObservations: [native, independent],
+    route: {
+      weight: "apps/api/AGENTS.md", rootPath: "AGENTS.md",
+      ownerOf: (ids) => ids.every((id) => id === "H" || id === "X") ? "apps/api/AGENTS.md" : null,
+    },
+  });
+  assert.equal(api.gaps[0].sessions, 2);
+  assert.equal(api.sourceSessions[native.source], "H");
+});
+
+test("direct fold resolves source-qualified collision records to one validated observer", () => {
+  const gap = "Read database documentation before writing queries.";
+  const current = (id, observer) => record(id, {
+    transcript: {
+      id, identity: id, nativeId: id, harness: "pi", corroborationIdentity: observer,
+      startedAt: Date.parse("2026-08-01T00:00:00Z"),
+    },
+  });
+  const fresh = {
+    proposedInstruction: gap, sessionId: JSON.stringify(["P", "P"]),
+    sourceSessionId: "P", sightingIds: ["P"], source: "pi · P · 2026-08-01", quote: "fresh P quote",
+  };
+  const independent = {
+    proposedInstruction: gap, sessionId: "X", sourceSessionId: "X", sightingIds: ["X"],
+    source: "pi · X · 2026-08-01", quote: "fresh X quote",
+  };
+  const summary = foldEvidence([current("P", "P"), current("X", "X")], {
+    gapObservations: [fresh, independent], minGapEvidence: 2,
+  });
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.equal(summary.sourceObservers[fresh.source], "P");
+  const singleton = foldEvidence([current("P", "P")], {
+    gapObservations: [fresh, { ...fresh, sessionId: "P" }], minGapEvidence: 2,
+  });
+  assert.deepEqual(singleton.gaps, []);
+  assert.equal(singleton.totals.droppedGapSingletons, 1);
+});
+
 test("instructions with no evidence still appear - they are the removal candidates", () => {
   const summary = foldEvidence([record("s1", { positive: [{ instruction: "AG-001", quote: "q" }] })], { memoryFile });
 
