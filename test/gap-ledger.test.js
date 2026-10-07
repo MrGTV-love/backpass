@@ -49,7 +49,7 @@ function record(id, gaps, { startedAt = Date.parse("2026-08-01T00:00:00Z"), memo
 
 /** A throwaway `.backpass/` and a ctx shaped like the one `foldForRun` reads. */
 function harness(overrides = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-ledger-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "backpass-ledger-")));
   const state = new State(root).ensure();
   const ctx = { config: { state, minGapEvidence: 2, gapLedgerMaxAge: "90d", ...overrides } };
   return { root, state, ctx };
