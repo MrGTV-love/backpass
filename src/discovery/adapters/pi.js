@@ -22,9 +22,9 @@ import {
  * prepends a fixed-width `{type:"title"}` record, so the `{type:"session", cwd, id}`
  * entry is line 2 there. omp also writes subagent transcripts one level deeper, at
  * `<escaped-cwd>/<session-id>/<Name>.jsonl`, and their own subagents at
- * `<escaped-cwd>/<session-id>/<Name>/<Name>.<Child>.jsonl`; every descendant is related to
- * the root session. BB's Pi bridge writes the same JSONL shape directly under
- * `<bb-data-dir>/pi-bridge-sessions/`.
+ * `<escaped-cwd>/<session-id>/<Name>/<Name>.<Child>.jsonl`. Ancestor headers establish
+ * observer provenance; nested layout alone marks automation. BB's Pi bridge writes the
+ * same JSONL shape directly under `<bb-data-dir>/pi-bridge-sessions/`.
  *
  * Entries form a parent/child tree but arrive in order, so a linear read is faithful.
  * `model_change` / `thinking_level_change` records give the model actually used

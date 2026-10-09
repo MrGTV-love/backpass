@@ -30,9 +30,8 @@ import { corroborationIdentityOf } from "./transcript.js";
  *  2. Near-duplicate gaps from different sessions are clustered, so "three sessions
  *     re-derived the db schema" arrives as one item with three quotes. Judged identity
  *     happens upstream (analysis citations and the consolidation pass reshape the
- *     ledger); the clustering here stays deterministic. Per-sighting `domain` votes
- *     travel with the cluster; the fold decides the cluster domain after grouping
- *     (majority orchestration is excluded from proposals; mixed clusters stay visible).
+ *     ledger); the clustering here stays deterministic. Cluster domain is decided after
+ *     grouping by `clusterDomainVote`.
  *  3. Gap clusters below `minGapEvidence` are ineligible for synthesis. Mixed-domain
  *     clusters remain visible as report-only diagnostics; other under-floor clusters are
  *     dropped. Batch size > 1 means one bad session never rewrites the weights. Sessions
@@ -190,11 +189,8 @@ export function foldEvidence(
     }
   }
 
-  // Orchestration-domain votes are mistakes caused not by this repository but by the
-  // external agent harness or tooling that orchestrated the session. They still cluster
-  // with project sightings of the same gap; a cluster is withheld from proposals only
-  // when a majority of its sightings vote orchestration. Mixed clusters stay visible
-  // so one inconsistent classifier call cannot drop a real recurrence below the floor.
+  // Domain voting is owned by `clusterDomainVote`; observations are never pre-filtered
+  // by domain, so one inconsistent classifier call cannot hide a real recurrence.
   const labeledObservations = gapObservations
     ? persistedObservations.map((observation, index) => ({
         ...observation,
@@ -346,7 +342,7 @@ export function foldEvidence(
       negative: negativeCount,
       // The missing-instruction lane's findings count: every sighting this fold clustered
       // over (the pruned ledger when one is passed, this run's records otherwise).
-      // Orchestration sightings are per-sighting votes; cluster domain is decided after grouping.
+      // Raw sighting totals are report-only; `clusterDomainVote` counts observers after grouping.
       gapSightings: allObservations.length,
       gapClusters: gaps.length,
       reportOnlyGapClusters: reportOnlyGaps.length,
@@ -619,9 +615,9 @@ function highestRisk(items) {
 
 /**
  * The failed-trigger reading of a cluster: which existing skill the analyses judged to
- * already cover this mistake, and in how many of the cluster's sessions. Items are one
- * per session, so counting items counts sessions. The most-cited skill wins; a cluster
- * nobody tied to a skill contributes nothing.
+ * already cover this mistake, and in how many of the cluster's observers. Items are one
+ * per observer, so related transcripts cannot multiply citations. The most-cited skill
+ * wins; a cluster nobody tied to a skill contributes nothing.
  */
 function failedTriggerOf(items, minGapEvidence) {
   const counts = new Map();

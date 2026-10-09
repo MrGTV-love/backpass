@@ -6,14 +6,13 @@ import { corroborationIdentityOf } from "./transcript.js";
 /**
  * Durable gap corroboration across runs (`.backpass/gap-ledger.json`).
  *
- * The fold stage only promotes a gap once `minGapEvidence` distinct sessions report it.
- * Counting those sessions from the evidence that happens to be on disk is lossy: a
+ * The fold stage only promotes a gap once `minGapEvidence` distinct observers report it.
+ * Counting those observers from the evidence that happens to be on disk is lossy: a
  * transcript's evidence file is rewritten every time it is re-analyzed against a changed
  * memory file (every apply changes the hash), and the analysis model rephrases gaps
  * between runs, so two observations of one gap rarely line up in a single fold. This
- * ledger keeps every gap observation, keyed by gap identity and session, so observations
- * collected on different runs can still reach the bar when their sessions are together in
- * a later run's selected sample.
+ * ledger preserves gap history across runs, so observations collected separately can
+ * still reach the bar when their observers are together in a later run's selected sample.
  *
  * Identity and freshness rules:
  *
@@ -31,12 +30,11 @@ import { corroborationIdentityOf } from "./transcript.js";
  *  - Every observation carries the `domain` the analysis judged: `orchestration` when the
  *    mistake was not caused by this repository but by an external agent harness or tooling
  *    that orchestrated the task, `project` for every other mistake.
- *    Each observation stores that vote. The fold clusters first and decides domain
- *    afterward (majority orchestration withholds a cluster from proposals; a mixed
- *    cluster stays visible). A missing domain counts as project, so evidence from
- *    before the field existed keeps its old behavior.
- *  - Observations normally use corroboration identity (`corroborationIdentityOf`: the
- *    linked root session's identity for an OMP descendant, the transcript's own otherwise).
+ *    Domain voting is owned by `clusterDomainVote` in `src/fold.js`. A missing domain
+ *    counts as project, so evidence from before the field existed keeps its old behavior.
+ *  - Observations normally use discovery's shared observer identity for linked OMP
+ *    descendants, the transcript's own otherwise (`corroborationIdentityOf`). Linkage
+ *    rules live in `src/discovery/adapters/pi.js`.
  *    Older per-file keys migrate only when selected native provenance and any occupied
  *    destination are compatible; legacy id keys additionally require unambiguous
  *    `legacyIds`. Incompatible history stays separately keyed, and recording uses a

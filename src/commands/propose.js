@@ -35,8 +35,9 @@ import { pruneHostCache } from "../discovery/cache.js";
  * cap remain on disk. Folding those records would inflate `analyzedSessions` beyond the
  * sampled corpus or score positional instruction aliases against an index they never saw.
  * Legacy records stay excluded until ordinary discovery and analysis backfill them.
- * Current discovery's corroboration fields are overlaid on admitted records, so a
- * subagent analyzed before its parent appeared still folds under the parent's identity.
+ * Current discovery's interaction and corroboration fields are overlaid only after
+ * admission, so stale stamps and observer identities from missing ancestors do not
+ * survive in the fold.
  */
 export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], transcripts = [], { route = null } = {}) {
   const { state, minGapEvidence, gapLedgerMaxAge } = ctx.config;

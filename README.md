@@ -254,12 +254,11 @@ it controls only the additional default OMP store, not the harness backpass invo
 
 OMP nests subagent JSONL files below each parent session, and a subagent's own subagents
 one level further down. Backpass analyzes each file separately and uses its native
-sightings for nested-memory ownership, but counts the root session as their shared
-corroborating observer; a session and its subagents cannot count as independent sessions,
-including across synced SSH stores. Matching descendant copies link their families
-without merging distinct roots on the same host that share a native ID. Nested
-descendants are non-interactive even when ancestor headers are unavailable; root
-provenance is linked only when those headers can be read.
+sightings for nested-memory ownership. With a readable root header, the session and its
+descendants share one corroborating observer, including across synced SSH stores. If the
+root is unreadable, the highest readable ancestor is used; without one, the file retains
+its own observer identity. Matching descendant copies link their families without merging
+distinct roots on the same host that share a native ID.
 
 OpenCode collection reads both store layouts: OpenCode 1.x (`session`, `message`, `part`) and OpenCode 2.x (`session_v2`, `session_message`).
 For 2.x, session activity uses the later of the session's update time and its newest message's update time.
@@ -302,8 +301,8 @@ Windows hosts retain native path handling; backpass does not translate these pat
 Configured SSH hosts are collected after the local stores and join the same corpus, with
 the same tiers, sample and cap - see [Your other machines](#your-other-machines).
 
-Collection is incremental. Codex alone can hold 10,000+ rollouts, so verdicts are cached in
-`.backpass/scan-cache.json` by path, mtime and size - re-scans cost only the new files.
+Collection is incremental: cached file-backed descriptors are reused when their inputs
+are unchanged. The cache rules live in [`src/discovery/index.js`](src/discovery/index.js).
 A harness whose store is missing or has drifted into an unrecognised shape produces a
 warning and is skipped; the run continues.
 backpass's own loss and gradient-descent calls land in these same stores under the repo's cwd; every prompt it sends is tagged, and tagged sessions are excluded from the corpus (the `SELF` column in `backpass scan`).
@@ -412,16 +411,16 @@ Per-transcript failures, such as timeouts or unparseable output, still let the r
 ### 4. Aggregate gradients - and one judged consolidation call
 
 Evidence is grouped by instruction, giving each one a positive/negative count, a count of
-distinct sessions with harm-class negatives, and a **relevance** figure: the share of
+distinct observers with harm-class negatives, and a **relevance** figure: the share of
 analyzed sessions in which it mattered at all. Relevance is reported both overall and
 separately for interactive and non-interactive sessions. The fold also reports memory-file
 units that substantially overlap a project skill. An overlap with a skill description duplicates
 always-loaded tokens and points the shrink at the memory-file copy; an overlap with a
 triggered skill body is placement evidence only, since the memory copy may be the only
 always-loaded coverage. Neither kind is deleted automatically. Duplicate gaps across
-sessions are clustered, and only clusters seen in at least `minGapEvidence` sessions
-(default 2) are eligible for synthesis. Mixed-domain clusters below that floor remain
-visible as report-only diagnostics. One bad session never rewrites the weights.
+sessions are clustered; only clusters meeting the [evidence floor](#5-gradient-descent---native-edits)
+are eligible for synthesis. Mixed-domain clusters below that floor remain visible as
+report-only diagnostics. One bad session never rewrites the weights.
 
 Whether two sightings are one gap is a judgment call, not a word-overlap score - models
 paraphrase, and a paraphrase that fails a lexical match would hide real recurrence.
@@ -447,11 +446,11 @@ on disk. That file is left untouched, but it does not count toward this run's se
 or instruction scores, or add a gap observation, until ordinary discovery and analysis
 select and refresh it.
 
-Gap sightings persist across runs in `.backpass/gap-ledger.json` by gap and session, but a
-run only counts observations whose sessions belong to its selected sample. This prevents
-older observations outside the cap from undoing the sample mix while still allowing
-corroboration across runs when those sessions remain selected. The same session never counts
-twice, a sighting retires once the memory file or a project skill covers it, and a session's
+Gap sightings persist across runs in `.backpass/gap-ledger.json`; identity and provenance
+rules live in [`src/gap-ledger.js`](src/gap-ledger.js). A run only counts observations
+admitted under observers in its selected sample. This prevents older observations outside
+the cap from undoing the sample mix while allowing corroboration across runs. Each observer
+counts once per gap, a sighting retires once the memory file or a project skill covers it, and a session's
 sightings expire after `gapLedgerMaxAge` (default 90d). Until a gap corroborates it stays out
 of the proposal entirely.
 
@@ -476,15 +475,16 @@ Then mechanical gates run, and they are not negotiable:
 - every measured change belongs to exactly one annotated edit - an unexplained change
   is a violation, so is an edit that names no change
 - every edit that changes the always-loaded surface - adding, rewriting or removing text -
-  needs quotes from `minGapEvidence` distinct sessions. The count is measured from the
-  edit's own quote sources, and only source labels issued by this run's fold count. A
-  mistyped or invented label does not create another session, and a session count the model
-  reports is ignored. Rewrites are not
+  needs quotes from `minGapEvidence` distinct corroborating observers (default 2). The
+  count is measured from the edit's own quote sources: only labels issued by this run's
+  fold count, and related transcripts share the observer described under [collection](#how-it-works).
+  A mistyped or invented label does not create another observer; model-reported counts
+  are ignored. Rewrites are not
   classified by shape: a one-session tightening is refused along with a one-session
   append, because deciding which is which is a question about meaning that a line diff
   cannot answer. `extract` and `move` are exempt - they keep every always-loaded line.
 - removing a memory-file instruction outright needs harm-class negatives from
-  `minGapEvidence` distinct sessions - non-compliance never counts, because a rule that
+  `minGapEvidence` distinct observers - non-compliance never counts, because a rule that
   was skipped needs reinforcement, not deletion. A pure deletion in a skill file is also
   a removal, but no evidence can attribute harm to skill-file text, so it is refused.
 - an extraction preserves every line it removes in the skills it creates or extends, and
@@ -912,7 +912,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
 
 ```
 .backpass/
-  scan-cache.json        collect-samples verdicts by path + mtime + size
+  scan-cache.json        cached collect-samples descriptors (see Collect samples)
   evidence/<identity>.json per-transcript loss
   evidence-summary.json  aggregated gradients
   proposal.json          the latest parseable gradient-descent step (absent if none was produced)
@@ -920,7 +920,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
   prompts/               the exact prompts of the last run
   agent-probe-cache.json which harnesses were available and logged in, and when
   rejections.json        edits you turned down, and the evidence behind them
-  gap-ledger.json        gap sightings by gap and session, accumulated across runs
+  gap-ledger.json        durable gap sightings (see Aggregate gradients)
   hosts/                 transcripts fetched from SSH hosts (mode 0700), pruned after 30 days unused
   raw/                   temporary session events (see Distill)
   apply/apply.html       the rendered review surface

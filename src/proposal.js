@@ -122,8 +122,8 @@ function normalizeEdit(raw, index, knownSources = null, sourceObservers = null) 
     instructions: Array.isArray(raw?.instructions) ? raw.instructions.map(String) : [],
     evidence,
     // Corroboration is measured from the edit's normalized quotes, never from a
-    // model-reported count. When the fold handed over this run's source labels,
-    // only those labels count - a typed-but-never-issued source is not a session.
+    // model-reported count. Fold-issued labels admit citations; `sourceObservers`
+    // collapses related native transcripts before counting independent observers.
     transcripts: countSources(normalizedEvidence, knownSources, sourceObservers),
   };
 }
