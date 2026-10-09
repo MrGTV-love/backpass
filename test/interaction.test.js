@@ -978,6 +978,77 @@ test("nested OMP automation stays non-interactive with unreadable ancestors and 
   }
 });
 
+test("standalone fold refreshes stale OMP interaction categories with unreadable ancestors", async () => {
+  const repo = initRepo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-omp-fold-interaction-"));
+  const sessionRoot = path.join(home, ".omp", "agent", "sessions", "-repo-demo");
+  const header = (id) => [
+    { type: "title", v: 1, title: "" },
+    { type: "session", version: 3, id, timestamp: "2026-08-27T00:00:00.000Z", cwd: repo },
+  ];
+  writeJsonl(path.join(sessionRoot, "root.jsonl"), [{ type: "title", title: "unreadable header" }]);
+  writeJsonl(path.join(sessionRoot, "root", "Subagent.jsonl"), header("child-native"));
+  writeJsonl(path.join(sessionRoot, "other-root", "Missing", "Missing.Child.jsonl"), header("grandchild-native"));
+  writeJsonl(path.join(sessionRoot, "human.jsonl"), header("human-native"));
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const config = loadConfig(repo, { discovery: { harnesses: ["pi"], since: "all", includeOmp: true } });
+    config.state = new State(repo).ensure();
+    const repository = { name: "demo", root: repo, worktrees: [repo], remotes: [] };
+    const { transcripts } = await discoverTranscripts({ repo: repository, config });
+    assert.equal(transcripts.length, 3);
+    for (const transcript of transcripts) {
+      assert.equal(transcript.parentSessionId, undefined);
+      const human = transcript.nativeId === "human-native";
+      assert.equal(transcript.interaction, human ? INTERACTIVE : NON_INTERACTIVE);
+      config.state.writeEvidence(transcript, {
+        status: "ok",
+        transcript: { ...transcript, interactionSignals: {}, interaction: human ? NON_INTERACTIVE : INTERACTIVE },
+        memoryHash: "sha256:memory",
+        memoryPath: "AGENTS.md",
+        key: evidenceKey(transcript, "sha256:memory"),
+        positive: human ? [{ instruction: "AG-001", quote: "kept the PR small" }] : [],
+        negative: human ? [] : [{ instruction: "AG-002", quote: "made the PR too large", class: "harm" }],
+        gaps: [],
+      });
+    }
+
+    for (const staleDiscoveryStamp of [false, true]) {
+      const selected = transcripts.map((transcript) => ({
+        ...transcript,
+        interaction: staleDiscoveryStamp ? INTERACTIVE : transcript.interaction,
+      }));
+      const summary = await foldForRun(
+        { repo: repository, config },
+        { path: "AGENTS.md", text: "", units: [] },
+        "sha256:memory",
+        [],
+        selected,
+      );
+      assert.equal(summary.analyzedSessions, 3);
+      assert.deepEqual(summary.analyzedByInteraction, { [INTERACTIVE]: 1, [NON_INTERACTIVE]: 2 });
+      assert.deepEqual(summary.instructions.find((row) => row.instruction === "AG-001").relevanceByInteraction, {
+        [INTERACTIVE]: 1,
+        [NON_INTERACTIVE]: 0,
+      });
+      assert.deepEqual(summary.instructions.find((row) => row.instruction === "AG-002").relevanceByInteraction, {
+        [INTERACTIVE]: 0,
+        [NON_INTERACTIVE]: 1,
+      });
+    }
+    assert.equal(
+      config.state.listEvidence().find((record) => record.transcript.nativeId === "child-native").transcript.interaction,
+      INTERACTIVE,
+    );
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("nested OMP subagents share the root identity once the root session appears", async () => {
   const repo = initRepo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-omp-nested-discovery-"));

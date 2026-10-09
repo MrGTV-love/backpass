@@ -318,6 +318,9 @@ sessions are classified the same way if they leak past collection's source filte
 no-mistakes pipeline run is just one kind of non-interactive session, not its own category.
 Missing harness metadata defaults to interactive. `backpass scan`, the proposal, and apply
 all print the mix so relevance is never silently computed against a robot-skewed pool.
+Standalone `backpass propose` uses current discovery's interaction signals and category
+for admitted cached evidence. Records without a stored category remain excluded until
+analysis backfills them.
 
 ```sh
 backpass scan --since 7d --strict

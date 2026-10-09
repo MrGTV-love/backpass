@@ -9,7 +9,7 @@ import {
 } from "../gap-ledger.js";
 import { synthesizeProposal } from "../synthesize.js";
 import { ProposalViolation } from "../proposal.js";
-import { formatCorpusMix, INTERACTIVE, NON_INTERACTIVE } from "../interaction.js";
+import { classifyInteraction, formatCorpusMix, INTERACTIVE, NON_INTERACTIVE } from "../interaction.js";
 import { UserError, color, info, json, out, terminalSafe } from "../logger.js";
 import { budgetBar, formatTokens } from "../tokens.js";
 import { emitProgress } from "../progress.js";
@@ -78,6 +78,8 @@ export async function foldForRun(ctx, memoryFile, memoryHash, skills = [], trans
     }
     const transcript = {
       ...record.transcript,
+      interactionSignals: currentTranscript.interactionSignals,
+      interaction: classifyInteraction(currentTranscript),
       parentSessionId: currentTranscript.parentSessionId || null,
       corroborationIdentity: corroborationIdentityOf(currentTranscript),
       corroborationNativeId: currentTranscript.corroborationNativeId || null,
