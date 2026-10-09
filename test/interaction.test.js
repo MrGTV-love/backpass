@@ -1038,7 +1038,8 @@ test("standalone fold refreshes stale OMP interaction categories with unreadable
       });
     }
     assert.equal(
-      config.state.listEvidence().find((record) => record.transcript.nativeId === "child-native").transcript.interaction,
+      config.state.listEvidence().find((record) => record.transcript.nativeId === "child-native").transcript
+        .interaction,
       INTERACTIVE,
     );
   } finally {
