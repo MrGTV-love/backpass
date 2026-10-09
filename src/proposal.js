@@ -639,10 +639,6 @@ export function buildProposal(rawResult, context) {
             .filter(Boolean),
         ),
       ];
-      const completeAttribution = edit.evidence.every((item) => {
-        const native = summary?.sourceSessions?.[normalizeSourceLabel(item.source)];
-        return Array.isArray(native) ? native.length > 0 : Boolean(native);
-      });
       const sightings = edit.evidence.flatMap((item) => {
         const label = normalizeSourceLabel(item.source);
         const observers = summary?.sourceObservers?.[label] ?? summary?.sourceSessions?.[label];
@@ -653,7 +649,7 @@ export function buildProposal(rawResult, context) {
       });
       const owner = rootOwnsGap(sightings, routing.rootOwnedGaps ?? summary?.rootOwnedGaps)
         ? routing.rootPath
-        : ((completeAttribution ? routing.ownerOf(sessions) : null) ?? routing.rootPath);
+        : (routing.ownerOf(sessions) ?? routing.rootPath);
       const here = routing.weight ?? routing.rootPath;
       if (owner !== here) {
         violations.push(
