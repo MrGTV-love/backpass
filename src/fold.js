@@ -281,12 +281,7 @@ export function foldEvidence(
 
   const owners = route
     ? gapClusters.map((cluster, index) =>
-        allDecided[index].failedTriggerSkill
-          ? null
-          : gapOwnerOf(
-              cluster.items.filter((item) => !item.projectCovered),
-              route,
-            ),
+        allDecided[index].failedTriggerSkill ? null : route.ownerOf([...cluster.sessions]),
       )
     : null;
   const routedGaps = [];
@@ -372,16 +367,12 @@ export function foldEvidence(
     if (route.weight === null) {
       summary.rootOwnedGaps = gapClusters
         .filter((cluster, index) => owners[index] === null && cluster.sessions.size >= minGapEvidence)
-        .map((cluster) =>
-          cluster.items.flatMap((item) => item.sightingQuotes.map((quote) => ({ sessionId: item.sessionId, quote }))),
-        );
+        .map((cluster) => cluster.items.map((item) => ({ sessionId: item.sessionId, quote: item.quote })));
     }
     summary.routedGaps = routedGaps;
     summary.sourceSessions = sourceIdentitiesOf(issuedSources, [
-      ...usable.map((record) => [record.transcript.identity || record.transcript.id]),
-      ...persistedObservations.map((observation) =>
-        observation?.unattributedSightings ? [] : [observation?.sourceSessionId || observation?.sessionId],
-      ),
+      ...usable.map((record) => [corroborationIdentityOf(record.transcript)]),
+      ...persistedObservations.map((observation) => [observation?.sessionId]),
     ]);
   }
   return summary;
@@ -576,19 +567,14 @@ function observationDomain(obs) {
   return obs?.domain === "orchestration" ? "orchestration" : "project";
 }
 
-function gapOwnerOf(items, route) {
-  if (items.some((item) => item.unattributedSightings || !item.sightingIds.length)) return null;
-  return route.ownerOf(items.flatMap((item) => item.sightingIds));
-}
-
 function representativeGapItems(items, route) {
   const selected = items.slice(0, 6);
   if (!route || items.length <= 6) return selected;
-  const owner = gapOwnerOf(items, route);
-  if (gapOwnerOf(selected, route) === owner) return selected;
+  const owner = route.ownerOf(items.map((item) => item.sessionId));
+  if (route.ownerOf(selected.map((item) => item.sessionId)) === owner) return selected;
   for (const item of items.slice(6)) {
     const candidate = [...selected.slice(0, -1), item];
-    if (gapOwnerOf(candidate, route) === owner) return candidate;
+    if (route.ownerOf(candidate.map((entry) => entry.sessionId)) === owner) return candidate;
   }
   return selected;
 }

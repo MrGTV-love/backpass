@@ -52,8 +52,16 @@ async function cmdScanCore(ctx) {
       perHost,
       mix,
       transcripts: transcripts.map((transcript) => {
+        /** @type {Record<string, unknown>} */
         const serialized = { ...transcript };
         delete serialized.remote;
+        // Observer fields appear only when related transcripts share one (OMP subagents),
+        // so a plain store serializes exactly as before.
+        if (serialized.corroborationIdentity === serialized.identity) {
+          delete serialized.corroborationIdentity;
+          delete serialized.corroborationNativeId;
+          delete serialized.corroborationStartedAt;
+        }
         return serialized;
       }),
     });

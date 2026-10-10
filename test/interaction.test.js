@@ -269,6 +269,65 @@ test("scan prints the interactive/non-interactive mix through the CLI", () => {
   assert.match(human.stdout, /interactive 1 · non-interactive 2/);
 });
 
+test("scan --json on a plain Pi store ignores deeper files and carries no observer fields until includeOmp is set", () => {
+  const repo = initRepo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-pi-plain-home-"));
+  const session = (id, title = false) =>
+    [
+      ...(title ? [{ type: "title", v: 1, title: "" }] : []),
+      { type: "session", version: 3, id, timestamp: "2026-08-20T10:00:00.000Z", cwd: repo },
+      {
+        type: "message",
+        id: "e1",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        message: { role: "user", content: [{ type: "text", text: `Do the work ${id}` }] },
+      },
+    ].map((entry) => JSON.stringify(entry));
+  const write = (file, lines) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  };
+  const piDir = path.join(home, ".pi", "agent", "sessions", "-repo-demo");
+  write(path.join(piDir, "plain-root.jsonl"), session("plain-root"));
+  write(path.join(piDir, "plain-root", "Deeper.jsonl"), session("plain-deeper"));
+  write(path.join(piDir, "titled.jsonl"), session("plain-titled", true));
+  const ompDir = path.join(home, ".omp", "agent", "sessions", "-repo-demo");
+  write(path.join(ompDir, "omp-root.jsonl"), session("omp-root", true));
+  write(path.join(ompDir, "omp-root", "Helper.jsonl"), session("omp-helper", true));
+
+  const scan = () => {
+    const result = spawnSync(process.execPath, [CLI, "scan", "--harness", "pi", "--since", "all", "--json"], {
+      cwd: repo,
+      env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  const plain = scan();
+  assert.deepEqual(
+    plain.transcripts.map((t) => [t.nativeId, t.interaction]),
+    [["plain-root", INTERACTIVE]],
+  );
+  assert.deepEqual(plain.mix, { interactive: 1, nonInteractive: 0, total: 1 });
+  for (const t of plain.transcripts) {
+    assert.deepEqual(t.interactionSignals, {});
+    for (const key of ["corroborationIdentity", "corroborationNativeId", "corroborationStartedAt"]) {
+      assert.equal(key in t, false, key);
+    }
+  }
+
+  fs.writeFileSync(path.join(repo, ".backpassrc.json"), JSON.stringify({ discovery: { includeOmp: true } }));
+  const opted = scan();
+  const byId = new Map(opted.transcripts.map((t) => [t.nativeId, t]));
+  assert.deepEqual([...byId.keys()].sort(), ["omp-helper", "omp-root", "plain-root"]);
+  assert.equal(byId.get("plain-root").interaction, INTERACTIVE);
+  assert.equal(byId.get("omp-root").interaction, INTERACTIVE);
+  assert.equal(byId.get("omp-helper").interaction, NON_INTERACTIVE);
+  assert.equal(byId.get("omp-helper").corroborationNativeId, "omp-root");
+});
+
 test("cmdScan includes the mix on the human table", async () => {
   const repo = initRepo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-mix-scan-"));

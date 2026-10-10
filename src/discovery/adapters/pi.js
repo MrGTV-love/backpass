@@ -20,7 +20,9 @@ import {
  * same JSONL shape under `~/.omp/agent/sessions/` (opt-in via `discovery.includeOmp`)
  * and honors `PI_CODING_AGENT_DIR`, but
  * prepends a fixed-width `{type:"title"}` record, so the `{type:"session", cwd, id}`
- * entry is line 2 there. omp also writes subagent transcripts one level deeper, at
+ * entry is line 2 there. Only the opt-in OMP store gets the title and nested handling
+ * below; every other store is read one level deep with a line-1 header, as before.
+ * omp also writes subagent transcripts one level deeper, at
  * `<escaped-cwd>/<session-id>/<Name>.jsonl`, and their own subagents at
  * `<escaped-cwd>/<session-id>/<Name>/<Name>.<Child>.jsonl`. Ancestor headers establish
  * observer provenance; nested layout alone marks automation. BB's Pi bridge writes the
@@ -63,7 +65,7 @@ function storeSpecs(config) {
     { path: home(".bb", "pi-bridge-sessions"), direct: true, nested: false },
   ];
   if (config?.discovery?.includeOmp === true) {
-    specs.push({ path: home(".omp", "agent", "sessions"), direct: false, nested: true });
+    specs.push({ path: home(".omp", "agent", "sessions"), direct: false, nested: true, omp: true });
   }
   const piAgentDir = expandEnvPath(process.env.PI_CODING_AGENT_DIR);
   if (piAgentDir) specs.push({ path: path.join(piAgentDir, "sessions"), direct: false, nested: true });
@@ -81,6 +83,7 @@ function storeSpecs(config) {
     if (existing) {
       existing.direct ||= spec.direct;
       existing.nested ||= spec.nested;
+      existing.omp ||= spec.omp;
     } else {
       unique.set(key, spec);
     }
@@ -100,7 +103,7 @@ export function enumerate({ config } = {}) {
   for (const spec of storeSpecs(config)) {
     const files = [
       ...(spec.direct ? listFiles(spec.path, ".jsonl") : []),
-      ...(spec.nested ? listDirs(spec.path).flatMap((dir) => sessionFiles(dir, SUBAGENT_DEPTH)) : []),
+      ...(spec.nested ? listDirs(spec.path).flatMap((dir) => sessionFiles(dir, spec.omp ? SUBAGENT_DEPTH : 0)) : []),
     ];
     for (const file of files) {
       const key = realpathOrResolve(file);
@@ -113,7 +116,8 @@ export function enumerate({ config } = {}) {
         path: file,
         mtimeMs: stat.mtimeMs,
         bytes: stat.size,
-        subagent: spec.nested && path.relative(spec.path, file).split(path.sep).length > 2,
+        omp: Boolean(spec.omp),
+        subagent: Boolean(spec.omp) && path.relative(spec.path, file).split(path.sep).length > 2,
       });
     }
   }
@@ -131,17 +135,18 @@ export function createScanContext() {
   return { parentHeaders: new Map() };
 }
 
-function readSessionHeader(file) {
-  const [firstLine, secondLine] = readHeadLines(file, 2);
+/** A leading `{type:"title"}` record is an omp trait; plain Pi stores read exactly as on main. */
+function readSessionHeader(file, { omp = false } = {}) {
+  const [firstLine, secondLine] = readHeadLines(file, omp ? 2 : 1);
   const first = parseJsonLine(firstLine);
-  return first?.type === "session" ? first : first?.type === "title" ? parseJsonLine(secondLine) : null;
+  return first?.type === "session" ? first : omp && first?.type === "title" ? parseJsonLine(secondLine) : null;
 }
 
 function readParentSession(parentPath, scanContext) {
   const cache = scanContext?.parentHeaders;
   if (cache?.has(parentPath)) return cache.get(parentPath);
   const stat = statOrNull(parentPath);
-  const entry = stat?.isFile() ? readSessionHeader(parentPath) : null;
+  const entry = stat?.isFile() ? readSessionHeader(parentPath, { omp: true }) : null;
   const result =
     entry?.type === "session"
       ? {
@@ -180,17 +185,23 @@ function ancestorSessionPaths(candidatePath) {
 
 /** @param {{ scanContext?: { parentHeaders: Map<string, { entry: any, stat: import("node:fs").Stats, fingerprint: string } | null> } }} [options] */
 export function cacheDependency(candidate, options = {}) {
+  // Plain Pi files depend on nothing but themselves. An omp file also depends on its
+  // ancestors, and carries a marker so a store first scanned without omp parsing
+  // (a title-led header reads as null there) is reclassified once omp is switched on.
+  if (!candidate.omp) return undefined;
   return JSON.stringify(
-    ancestorSessionPaths(candidate.path).map(
-      (ancestorPath) => readParentSession(ancestorPath, options.scanContext)?.fingerprint ?? null,
-    ),
+    candidate.subagent
+      ? ancestorSessionPaths(candidate.path).map(
+          (ancestorPath) => readParentSession(ancestorPath, options.scanContext)?.fingerprint ?? null,
+        )
+      : [],
   );
 }
 
 /** @param {{ scanContext?: { parentHeaders: Map<string, { entry: any, stat: import("node:fs").Stats, fingerprint: string } | null> } }} [options] */
 export function classify(candidate, options = {}) {
   const { scanContext } = options;
-  const entry = readSessionHeader(candidate.path);
+  const entry = readSessionHeader(candidate.path, { omp: candidate.omp });
   if (!entry || entry.type !== "session" || !entry.cwd) return null;
 
   const descriptor = {
@@ -203,7 +214,7 @@ export function classify(candidate, options = {}) {
     interactionSignals: candidate.subagent ? { source: "subagent" } : emptyInteractionSignals(),
   };
 
-  for (const ancestorPath of ancestorSessionPaths(candidate.path)) {
+  for (const ancestorPath of candidate.subagent ? ancestorSessionPaths(candidate.path) : []) {
     const ancestorInfo = readParentSession(ancestorPath, scanContext);
     const ancestor = ancestorInfo?.entry;
     if (!ancestor) continue;

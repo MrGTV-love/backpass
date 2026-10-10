@@ -251,10 +251,14 @@ applies to configured SSH hosts. For `--scope user`, set it in `user.discovery` 
 include `"pi"` in `user.discovery.harnesses`; user scope otherwise collects only Claude
 and Codex. Explicit Pi store environment overrides still work without this setting;
 it controls only the additional default OMP store, not the harness backpass invokes.
+Without it, nothing OMP-specific is read: Pi stores (including `PI_CODING_AGENT_DIR`
+and bridge directories) are listed one level deep and need a `session` header on line 1,
+exactly as before.
 
 OMP nests subagent JSONL files below each parent session, and a subagent's own subagents
-one level further down. Backpass analyzes each file separately and uses its native
-sightings for nested-memory ownership. With a readable root header, the session and its
+one level further down. Only the OMP store, with the setting on, is walked that deep and
+may open with a `title` record; a `PI_CODING_AGENT_DIR` that points at the same directory
+is treated as that store. Backpass analyzes each file separately. With a readable root header, the session and its
 descendants share one corroborating observer, including across synced SSH stores. If the
 root is unreadable, the highest readable ancestor is used; without one, the file retains
 its own observer identity. Matching descendant copies link their families without merging

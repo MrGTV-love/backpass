@@ -193,7 +193,6 @@ test("direct fold rejects a selected representative's inconsistent historical ob
       gapObservations: [historical, independent, ...(matchingGap ? [fresh] : [])],
     });
     assert.equal(summary.sourceObservers[historical.source], "L");
-    assert.equal(summary.sourceSessions[historical.source], "G");
     assert.equal(summary.totals.gapSightings, matchingGap ? 2 : 1);
     assert.equal(summary.gaps.length, matchingGap ? 1 : 0);
     if (matchingGap) {
@@ -218,19 +217,11 @@ test("direct fold rejects a selected representative's inconsistent historical ob
       {
         gapObservations: [{ ...historical, sessionId: representativeSelected ? "L" : "P" }, independent],
         minGapEvidence: 2,
-        route: {
-          ...route,
-          ownerOf: (ids) => (ids.includes("P") ? null : "apps/api/AGENTS.md"),
-        },
+        route,
       },
     );
     assert.equal(summary.gaps[0].sessions, 2);
     assert.equal(summary.sourceObservers[historical.source], representativeSelected ? "L" : "P");
-    assert.equal(summary.sourceSessions[historical.source], "G");
-    assert.deepEqual(
-      new Set(summary.rootOwnedGaps.flat().map((item) => item.quote)),
-      new Set([...historical.sightingQuotes, independent.quote]),
-    );
   }
 });
 
@@ -282,33 +273,12 @@ test("direct fold resolves retained native aliases without admitting incompatibl
   assert.equal(summary.gaps[0].sessions, 2);
   assert.deepEqual(summary.gaps[0].quotes.map((quote) => quote.text).sort(), ["valid H quote", "valid X quote"]);
   assert.equal(summary.sourceObservers[native.source], "P");
-  assert.equal(summary.sourceSessions[native.source], "H");
-  assert.deepEqual(
-    new Set(
-      summary.rootOwnedGaps
-        .flat()
-        .filter((item) => item.sessionId === "P")
-        .map((item) => item.quote),
-    ),
-    new Set(["valid H quote", "second valid H quote"]),
-  );
   const singleton = foldEvidence([current("H", "P")], {
     minGapEvidence: 2,
     gapObservations: [native, duplicate],
   });
   assert.deepEqual(singleton.gaps, []);
   assert.equal(singleton.totals.droppedGapSingletons, 1);
-  const api = foldEvidence([current("H", "P"), current("X", "X")], {
-    minGapEvidence: 2,
-    gapObservations: [native, independent],
-    route: {
-      weight: "apps/api/AGENTS.md",
-      rootPath: "AGENTS.md",
-      ownerOf: (ids) => (ids.every((id) => id === "H" || id === "X") ? "apps/api/AGENTS.md" : null),
-    },
-  });
-  assert.equal(api.gaps[0].sessions, 2);
-  assert.equal(api.sourceSessions[native.source], "H");
 });
 
 test("direct fold resolves source-qualified collision records to one validated observer", () => {
