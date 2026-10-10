@@ -40,9 +40,8 @@ export function getAdapter(harness) {
  *
  * For file-backed stores the expensive step is reading each transcript's header, so
  * results are memoised in `.backpass/scan-cache.json` keyed by path + mtime + size. An
- * adapter may also export `cacheVersion` (bumped when its classification semantics
- * change) and `cacheDependency` (a fingerprint of other files a descriptor reads, such
- * as OMP ancestor sessions); a mismatch in either reclassifies the entry. Unchanged
+ * adapter may also export `cacheDependency` (a fingerprint of other files a descriptor
+ * reads, such as OMP ancestor sessions); a mismatch reclassifies the entry. Unchanged
  * entries avoid reclassification, but dependency fingerprints are checked per candidate.
  *
  * SQLite-backed stores (opencode, hermes, cursor IDE) query session metadata directly,
@@ -395,7 +394,6 @@ function discoverFiles(
 
     if (
       cached &&
-      cached.cacheVersion === adapter.cacheVersion &&
       cached.mtimeMs === candidate.mtimeMs &&
       cached.bytes === candidate.bytes &&
       (!hasCacheDependency || cached.cacheDependency === cacheDependency) &&
@@ -405,12 +403,7 @@ function discoverFiles(
       descriptor = cached.descriptor;
     } else {
       descriptor = adapter.classify(candidate, { repo, config, scanContext }) || null;
-      const cacheEntry = {
-        cacheVersion: adapter.cacheVersion,
-        mtimeMs: candidate.mtimeMs,
-        bytes: candidate.bytes,
-        descriptor,
-      };
+      const cacheEntry = { mtimeMs: candidate.mtimeMs, bytes: candidate.bytes, descriptor };
       if (hasCacheDependency) cacheEntry.cacheDependency = cacheDependency;
       cache.entries[cacheKey] = cacheEntry;
       markDirty();

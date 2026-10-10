@@ -156,6 +156,21 @@ test("pi adapter reads the session header and drops thinking blocks", () => {
   assert.equal(toolCall.result, "nothing to commit");
 });
 
+test("pi adapter ignores an omp-style model field outside a title-led transcript", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-pi-model-"));
+  const file = path.join(dir, "plain.jsonl");
+  fs.writeFileSync(
+    file,
+    [
+      { type: "session", version: 3, id: "plain", timestamp: "2026-08-27T00:00:00.000Z", cwd: "/repo/demo" },
+      { type: "model_change", id: "m1", parentId: null, model: "cursor/composer-2.5" },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  assert.equal(pi.read({ path: file }).model, null);
+});
+
 test("pi adapter classifies omp sessions past the title record and reads model", () => {
   const file = path.join(FIXTURES, "omp-session.jsonl");
   const descriptor = pi.classify(ompCandidateFor(file));
@@ -243,12 +258,12 @@ test("pi adapter links OMP subagents by nested path even when their cwd differs"
 test("pi discovery checks a missing parent path once per scan", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-pi-parent-cache-"));
   const sessionDir = path.join(root, "sessions", "-repo-demo");
-  const firstPath = path.join(sessionDir, "first.jsonl");
-  const secondPath = path.join(sessionDir, "second.jsonl");
-  writePiSession(firstPath, { id: "first", cwd: "/repo/demo" });
-  writePiSession(secondPath, { id: "second", cwd: "/repo/demo" });
-  const candidates = [candidateFor(firstPath), candidateFor(secondPath)];
-  const missingParentPath = path.join(root, "sessions", "-repo-demo.jsonl");
+  const firstPath = path.join(sessionDir, "missing-parent", "First.jsonl");
+  const secondPath = path.join(sessionDir, "missing-parent", "Second.jsonl");
+  writeOmpSession(firstPath, { id: "first", cwd: "/repo/demo" });
+  writeOmpSession(secondPath, { id: "second", cwd: "/repo/demo" });
+  const candidates = [ompCandidateFor(firstPath, { subagent: true }), ompCandidateFor(secondPath, { subagent: true })];
+  const missingParentPath = path.join(sessionDir, "missing-parent.jsonl");
   const scanContext = pi.createScanContext();
   const originalStatSync = fs.statSync;
   let parentProbes = 0;
@@ -258,12 +273,15 @@ test("pi discovery checks a missing parent path once per scan", () => {
     return originalStatSync.call(this, file, ...args);
   };
   try {
-    for (const candidate of candidates) pi.classify(candidate, { scanContext });
+    for (const candidate of candidates) {
+      const descriptor = pi.classify(candidate, { scanContext });
+      assert.equal(descriptor.parentSessionId, undefined);
+    }
   } finally {
     fs.statSync = originalStatSync;
   }
 
-  assert.ok(parentProbes <= 1, "ordinary sessions in one store should not repeat the same missing-parent lookup");
+  assert.equal(parentProbes, 1, "subagents sharing a missing parent should look it up once per scan");
 });
 function writeOmpSession(file, { id, cwd }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -639,15 +639,13 @@ export function buildProposal(rawResult, context) {
             .filter(Boolean),
         ),
       ];
-      const sightings = edit.evidence.flatMap((item) => {
-        const label = normalizeSourceLabel(item.source);
-        const observers = summary?.sourceObservers?.[label] ?? summary?.sourceSessions?.[label];
-        return [observers]
+      const sightings = edit.evidence.flatMap((item) =>
+        [summary?.sourceSessions?.[normalizeSourceLabel(item.source)]]
           .flat()
           .filter(Boolean)
-          .map((sessionId) => ({ sessionId, quote: item.text }));
-      });
-      const owner = rootOwnsGap(sightings, routing.rootOwnedGaps ?? summary?.rootOwnedGaps)
+          .map((sessionId) => ({ sessionId, quote: item.text })),
+      );
+      const owner = rootOwnsGap(sightings, routing.rootOwnedGaps)
         ? routing.rootPath
         : (routing.ownerOf(sessions) ?? routing.rootPath);
       const here = routing.weight ?? routing.rootPath;

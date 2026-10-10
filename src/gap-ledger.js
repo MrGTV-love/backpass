@@ -203,6 +203,14 @@ export function resolveGapObservationObserver(observation, observersByNative) {
   return observer;
 }
 
+function isOrdinaryNative(transcript, sessionIdentity) {
+  return (
+    !transcript.parentSessionId &&
+    !(transcript.harness === "pi" && transcript.interactionSignals?.source === "subagent") &&
+    (transcript.identity || transcript.id) === sessionIdentity
+  );
+}
+
 function destinationAcceptsObservation(observation, sessionIdentity, transcript, observersByNative) {
   if (!observation) return true;
   for (const native of new Set([observation.sourceSessionId, ...(observation.sightingIds || [])].filter(Boolean))) {
@@ -216,9 +224,7 @@ function destinationAcceptsObservation(observation, sessionIdentity, transcript,
       (observation.sourceSessionId === nativeIdentity || observation.sightingIds?.includes(nativeIdentity)) &&
       observersByNative.get(nativeIdentity)?.size === 1) ||
     (!observation.sourceSessionId &&
-      transcript.harness !== "pi" &&
-      !transcript.parentSessionId &&
-      nativeIdentity === sessionIdentity &&
+      isOrdinaryNative(transcript, sessionIdentity) &&
       (observation.sightingIds || []).every((native) => {
         const observers = observersByNative.get(native);
         return observers?.size === 1 && observers.has(sessionIdentity);
@@ -229,13 +235,7 @@ function destinationAcceptsObservation(observation, sessionIdentity, transcript,
 function takePriorObservations(entry, sessionIdentity, aliases, transcript, destinationIdentity = sessionIdentity) {
   const nativeIdentity = transcript.identity || transcript.id;
   const current = entry.sessions[destinationIdentity];
-  if (
-    current &&
-    !current.sourceSessionId &&
-    transcript.harness !== "pi" &&
-    !transcript.parentSessionId &&
-    nativeIdentity === sessionIdentity
-  ) {
+  if (current && !current.sourceSessionId && isOrdinaryNative(transcript, sessionIdentity)) {
     current.sourceSessionId = nativeIdentity;
     current.sightingIds = [...new Set([...(current.sightingIds || []), nativeIdentity])];
     delete current.unattributedSightings;
@@ -261,16 +261,6 @@ function takePriorObservations(entry, sessionIdentity, aliases, transcript, dest
 
 function hasUnattributedSightings(observation) {
   return Boolean(observation.unattributedSightings || !observation.sourceSessionId);
-}
-
-function sightingQuotesOf(observation) {
-  return [
-    ...new Set(
-      [observation.quote, ...(observation.sightingQuotes || [])].filter(
-        (quote) => typeof quote === "string" && quote.length > 0,
-      ),
-    ),
-  ];
 }
 
 /**
@@ -391,7 +381,6 @@ export function recordGapObservations(ledger, evidenceRecords, options = {}) {
         ...(priors.some(hasUnattributedSightings) ? { unattributedSightings: true } : {}),
         mistake: gap.mistake,
         quote: gap.quote,
-        sightingQuotes: [...new Set([...priors.flatMap(sightingQuotesOf), ...sightingQuotesOf(gap)])],
         recurrenceRisk: gap.recurrenceRisk,
         phrasings,
         domain:
@@ -422,9 +411,7 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
     if (!(transcript?.corroborationIdentity || transcript?.identity || transcript?.id)) continue;
     const sessionIdentity = corroborationIdentityOf(transcript);
     const aliases = sessionIdentityAliases(transcript, sessionIdentity, legacyIds);
-    const nativeIdentity = transcript.identity || transcript.id;
-    const ordinaryNative =
-      transcript.harness !== "pi" && !transcript.parentSessionId && sessionIdentity === nativeIdentity;
+    const ordinaryNative = isOrdinaryNative(transcript, sessionIdentity);
     selections.push({ transcript, sessionIdentity, aliases, ordinaryNative });
   }
 
@@ -485,7 +472,6 @@ export function normalizeGapLedgerSessions(ledger, transcripts, { legacyIds = ne
         ...current,
         ...(firstObservedAt ? { firstObservedAt } : {}),
         sightingIds: [...new Set(priors.flatMap((observation) => observation.sightingIds || []))],
-        sightingQuotes: [...new Set(priors.flatMap(sightingQuotesOf))],
         ...(priors.some(hasUnattributedSightings) ? { unattributedSightings: true } : {}),
         phrasings: [
           ...new Set([
@@ -582,7 +568,6 @@ export function ledgerGapObservations(ledger, memoryPath, skills = null) {
         unattributedSightings: hasUnattributedSightings(obs),
         mistake: obs.mistake,
         quote: obs.quote,
-        sightingQuotes: sightingQuotesOf(obs),
         recurrenceRisk: obs.recurrenceRisk,
         domain: obs.domain === "orchestration" ? "orchestration" : "project",
         ...(obs.coveredBySkill && (!skillNames || skillNames.has(obs.coveredBySkill))
@@ -649,7 +634,6 @@ export function mergeGapEntries(ledger, groups) {
           if (!prior.project && obs.project) prior.project = obs.project;
           if (!prior.projectRoot && obs.projectRoot) prior.projectRoot = obs.projectRoot;
           prior.sightingIds = [...new Set([...(prior.sightingIds || []), ...(obs.sightingIds || [])])];
-          prior.sightingQuotes = [...new Set([...sightingQuotesOf(prior), ...sightingQuotesOf(obs)])];
           if (hasUnattributedSightings(prior) || hasUnattributedSightings(obs)) prior.unattributedSightings = true;
           prior.phrasings = [
             ...new Set([

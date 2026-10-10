@@ -981,13 +981,7 @@ test("nested OMP automation stays non-interactive with unreadable ancestors and 
     for (const candidate of pi.enumerate({ config })) {
       const descriptor = pi.classify(candidate);
       if (descriptor) descriptor.interactionSignals = {};
-      cache.entries[`pi:${candidate.key}`] = {
-        cacheVersion: 4,
-        cacheDependency: pi.cacheDependency(candidate),
-        mtimeMs: candidate.mtimeMs,
-        bytes: candidate.bytes,
-        descriptor,
-      };
+      cache.entries[`pi:${candidate.key}`] = { mtimeMs: candidate.mtimeMs, bytes: candidate.bytes, descriptor };
     }
     config.state.writeScanCache(cache);
     const repository = { name: "demo", root: repo, worktrees: [repo], remotes: [] };

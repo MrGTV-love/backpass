@@ -194,7 +194,6 @@ test("observer migration requires complete selected unambiguous native provenanc
         sourceSessionId: "G",
         sightingIds: ["H"],
         quote: "representative quote",
-        sightingQuotes: ["other native quote"],
         domain: "project",
         ...(scenario.unattributedSightings ? { unattributedSightings: true } : {}),
       };
@@ -222,7 +221,6 @@ test("observer migration requires complete selected unambiguous native provenanc
       else {
         assert.equal(observations[0].sourceSessionId, "G");
         assert.deepEqual(observations[0].sightingIds, ["H"]);
-        assert.deepEqual(observations[0].sightingQuotes, ["representative quote", "other native quote"]);
       }
     }
   }
@@ -396,7 +394,6 @@ test("an occupied incompatible observer preserves its native alias through norma
   assert.deepEqual(ledger.entries[entryId].sessions.P, historical);
   assert.equal(ledger.entries[entryId].sessions.H.firstObservedAt, valid.firstObservedAt);
   assert.deepEqual(ledger.entries[entryId].sessions.H.sightingIds, ["H"]);
-  assert.deepEqual(ledger.entries[entryId].sessions.H.sightingQuotes, ["quote from H"]);
 });
 
 test("unresolved occupied destinations do not absorb valid selected native aliases", () => {
@@ -447,10 +444,6 @@ test("unresolved occupied destinations do not absorb valid selected native alias
     recordGapObservations(ledger, [fresh], { transcripts: scenario.selected });
     assert.deepEqual(ledger.entries[entryId].sessions.P, unresolved);
     assert.deepEqual(ledger.entries[entryId].sessions.H.sightingIds, ["H"]);
-    assert.deepEqual(
-      new Set(ledger.entries[entryId].sessions.H.sightingQuotes),
-      new Set(["valid H quote", "quote from H"]),
-    );
   }
 });
 
@@ -508,7 +501,6 @@ test("selected native history corroborates separately from an incompatible occup
       else {
         assert.equal(sessions.H.firstObservedAt, valid.firstObservedAt);
         assert.deepEqual(sessions.H.sightingIds, ["H"]);
-        assert.deepEqual(sessions.H.sightingQuotes, ["quote from H"]);
       }
       const repo = makeRepo({ [MEMORY_PATH]: "# T\n\n- Run pnpm test before pushing.\n- Keep the README current.\n" });
       const staged = stageAndMeasure({
@@ -575,7 +567,6 @@ test("fresh native evidence retains a deterministic sibling when its own observe
     assert.deepEqual(sessions.P, historical);
     assert.equal(Object.keys(sessions).length, 3);
     assert.deepEqual(sessions[JSON.stringify(["P", "P"])].sightingIds, ["P"]);
-    assert.deepEqual(sessions[JSON.stringify(["P", "P"])].sightingQuotes, ["quote from P"]);
   }
 });
 
@@ -588,7 +579,6 @@ test("selected historical sightings remain admitted when their representative is
     sourceSessionId: "G",
     sightingIds: ["P", "G"],
     quote: "historical G quote",
-    sightingQuotes: ["historical P quote", "historical G quote"],
   };
   h.state.writeGapLedger({
     version: 1,
@@ -646,7 +636,6 @@ test("fresh matching evidence cannot bypass rejected attributed alias migration"
     assert.deepEqual(sessions.G, old);
     assert.equal(sessions.R.sourceSessionId, "G");
     assert.deepEqual(sessions.R.sightingIds, ["G"]);
-    assert.deepEqual(sessions.R.sightingQuotes, ["quote from G"]);
   }
 });
 
@@ -670,7 +659,6 @@ test("direct recording still migrates provenance-free legacy aliases", () => {
   const observation = ledgerGapObservations(ledger, MEMORY_PATH)[0];
   assert.equal(observation.sessionId, "current-native");
   assert.equal(observation.sourceSessionId, "current-native");
-  assert.deepEqual(new Set(observation.sightingQuotes), new Set(["legacy quote", "quote from legacy"]));
 });
 
 test("the same session is never double-counted across runs", async () => {
@@ -851,7 +839,6 @@ test("native sightings union across recording, migration and consolidation with 
   assert.equal(shared.sourceSessionId, "child-api");
   assert.deepEqual(shared.sightingIds.sort(), ["child-api", "child-web"]);
   assert.equal(shared.source, "pi · child-api · 2026-08-02");
-  assert.deepEqual(shared.sightingQuotes.sort(), ["quote from child-api", "quote from child-web"]);
   const attribution = new Map(
     records.map((record) => [
       record.transcript.identity,
@@ -880,7 +867,6 @@ test("native sightings union across recording, migration and consolidation with 
   const fresh = preserved.find((observation) => observation.sessionId === "child-web");
   assert.equal(fresh.sourceSessionId, "child-web");
   assert.deepEqual(fresh.sightingIds, ["child-web"]);
-  assert.deepEqual(fresh.sightingQuotes, ["quote from child-web"]);
   const refolded = foldEvidence(records, { minGapEvidence: 2, gapObservations: preserved, route });
   assert.equal(refolded.gaps[0].sessions, 2);
 });
@@ -1167,6 +1153,44 @@ test("re-analysis of a session does not restart its expiry clock", async () => {
     "h2",
   );
   assert.equal(summary.gaps.length, 0, "the re-seen old sighting keeps its original first-seen time");
+});
+
+test("a plain Pi session re-reporting a provenance-free sighting keeps its slot and first-seen time", async () => {
+  const h = harness({ gapLedgerMaxAge: "90d" });
+  const entryId = gapEntryId(MEMORY_PATH, GAP);
+  const firstObservedAt = new Date(Date.now() - 50 * DAY).toISOString();
+  h.state.writeGapLedger({
+    version: 1,
+    entries: {
+      [entryId]: {
+        id: entryId,
+        memoryPath: MEMORY_PATH,
+        proposedInstruction: GAP,
+        phrasings: [GAP],
+        sessions: {
+          "pi-s1": {
+            firstObservedAt,
+            observedAt: firstObservedAt,
+            memoryHash: "h1",
+            source: "pi · pi-s1 · 2026-08-01",
+            quote: "quote from pi-s1",
+            phrasings: [GAP_REPHRASED],
+            coveredBySkill: "db-docs",
+          },
+        },
+      },
+    },
+  });
+  const again = record("pi-s1", [GAP], { memoryHash: "h2" });
+  again.transcript = { ...again.transcript, harness: "pi", nativeId: "pi-s1" };
+  again.key = evidenceKey(again.transcript, "h2");
+  await run(h, [again], memoryFile(), "h2");
+  const sessions = h.state.readGapLedger().entries[entryId].sessions;
+  assert.deepEqual(Object.keys(sessions), ["pi-s1"], "the main-era sighting is replaced, not duplicated");
+  assert.equal(sessions["pi-s1"].firstObservedAt, firstObservedAt);
+  assert.equal(sessions["pi-s1"].sourceSessionId, "pi-s1");
+  assert.deepEqual(sessions["pi-s1"].phrasings, [GAP_REPHRASED, GAP]);
+  assert.equal(sessions["pi-s1"].coveredBySkill, "db-docs");
 });
 
 test("a gap the memory file now covers is retired from the ledger", async () => {

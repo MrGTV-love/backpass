@@ -179,8 +179,6 @@ export function foldEvidence(
         recurrenceRisk: gap.recurrenceRisk,
         source,
         sessionId: corroborationIdentity,
-        sourceSessionId: sessionIdentity,
-        sightingIds: [sessionIdentity],
         domain: gap.domain === "orchestration" ? "orchestration" : "project",
         project: record.transcript.project || null,
         projectRoot: record.transcript.projectRoot || null,
@@ -327,6 +325,10 @@ export function foldEvidence(
     else reportOnlyByReason.tooFewProjects += 1;
   }
 
+  const sourceObservers = sourceIdentitiesOf(issuedSources, [
+    ...usable.map((record) => [corroborationIdentityOf(record.transcript)]),
+    ...persistedObservations.map((observation) => [observation?.sessionId]),
+  ]);
   const summary = {
     version: 1,
     generatedAt: new Date().toISOString(),
@@ -353,10 +355,7 @@ export function foldEvidence(
     instructions: instructionRows,
     sources: [...sources],
     sourceProjects,
-    sourceObservers: sourceIdentitiesOf(issuedSources, [
-      ...usable.map((record) => [corroborationIdentityOf(record.transcript)]),
-      ...persistedObservations.map((observation) => [observation?.sessionId]),
-    ]),
+    sourceObservers,
     parentHarmSessions,
     gaps,
     crossSurfaceDuplicates: duplicates,
@@ -370,10 +369,7 @@ export function foldEvidence(
         .map((cluster) => cluster.items.map((item) => ({ sessionId: item.sessionId, quote: item.quote })));
     }
     summary.routedGaps = routedGaps;
-    summary.sourceSessions = sourceIdentitiesOf(issuedSources, [
-      ...usable.map((record) => [corroborationIdentityOf(record.transcript)]),
-      ...persistedObservations.map((observation) => [observation?.sessionId]),
-    ]);
+    summary.sourceSessions = sourceObservers;
   }
   return summary;
 }
@@ -441,16 +437,9 @@ export function clusterGapObservations(observations, { checkProjectCoverage = fa
     const item = {
       mistake: obs.mistake,
       quote: obs.quote,
-      sightingQuotes: [
-        ...new Set(
-          [obs.quote, ...(obs.sightingQuotes || [])].filter((quote) => typeof quote === "string" && quote.length > 0),
-        ),
-      ],
       recurrenceRisk: obs.recurrenceRisk,
       source: obs.source,
       sessionId: obs.sessionId,
-      sightingIds: [...new Set(obs.sightingIds || [])],
-      unattributedSightings: Boolean(obs.unattributedSightings || !obs.sightingIds?.length),
       domain: observationDomain(obs),
       project: obs.project || null,
       projectCovered,
@@ -464,9 +453,6 @@ export function clusterGapObservations(observations, { checkProjectCoverage = fa
         if (observationDomain(obs) !== "orchestration") sessionItem.domain = "project";
         if (projectCovered) sessionItem.projectCovered = true;
         for (const id of observationGapIds(obs)) sessionItem.gapIds.add(id);
-        sessionItem.sightingIds = [...new Set([...sessionItem.sightingIds, ...item.sightingIds])];
-        sessionItem.sightingQuotes = [...new Set([...sessionItem.sightingQuotes, ...item.sightingQuotes])];
-        sessionItem.unattributedSightings ||= item.unattributedSightings;
       } else {
         cluster.items.push(item);
       }

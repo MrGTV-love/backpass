@@ -35,7 +35,6 @@ import {
  */
 
 export const name = "pi";
-export const cacheVersion = 5;
 
 const SUBAGENT_DEPTH = 2;
 
@@ -230,10 +229,11 @@ export function read(ref) {
   const entries = readJsonl(ref.path);
   const events = [];
   let model = null;
+  const omp = entries[0]?.type === "title";
 
   for (const entry of entries) {
     if (entry.type === "model_change") {
-      model = entry.modelId || entry.model || model;
+      model = entry.modelId || (omp && entry.model) || model;
       continue;
     }
     if (entry.type !== "message" || !entry.message) continue;

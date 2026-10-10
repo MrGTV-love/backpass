@@ -166,7 +166,6 @@ test("direct fold rejects a selected representative's inconsistent historical ob
     sightingIds: ["P", "G"],
     source: "pi · G · 2026-08-01",
     quote: "historical G quote",
-    sightingQuotes: ["historical P quote", "historical G quote"],
   };
   const independent = {
     proposedInstruction: gap,
@@ -245,7 +244,6 @@ test("direct fold resolves retained native aliases without admitting incompatibl
     sightingIds: ["P", "G"],
     source: "pi · G · 2026-08-01",
     quote: "historical G quote",
-    sightingQuotes: ["historical P quote", "historical G quote"],
   };
   const native = {
     proposedInstruction: gap,
