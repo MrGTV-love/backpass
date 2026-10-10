@@ -906,9 +906,8 @@ function recoverPiUsage({ promptFile, cwd, startedAt }) {
     .filter((c) => c.mtimeMs >= since)
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-  const scanContext = piStore.createScanContext();
   for (const candidate of candidates) {
-    const descriptor = piStore.classify(candidate, { scanContext });
+    const descriptor = piStore.classify(candidate);
     if (!descriptor || !wanted.has(descriptor.cwd)) continue;
     const entries = readJsonl(candidate.path);
     const firstUser = entries.find((e) => e.type === "message" && e.message?.role === "user");
