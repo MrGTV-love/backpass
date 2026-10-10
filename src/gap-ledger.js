@@ -74,11 +74,9 @@ export function emptyGapLedger() {
  * cross-machine corroboration actually is: two machines hitting one gap, named.
  */
 export function gapSource(transcript = {}) {
-  const startedAt = transcript.startedAt;
-  const date = startedAt ? new Date(startedAt).toISOString().slice(0, 10) : "unknown date";
+  const date = transcript.startedAt ? new Date(transcript.startedAt).toISOString().slice(0, 10) : "unknown date";
   const host = transcript.host ? ` · ${transcript.host}` : "";
-  const sourceId = sessionSourceId(transcript);
-  return `${transcript.harness} · ${sourceId} · ${date}${host}`;
+  return `${transcript.harness} · ${sessionSourceId(transcript)} · ${date}${host}`;
 }
 
 export function sessionSourceId(transcript = {}) {
