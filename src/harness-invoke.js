@@ -21,6 +21,8 @@ import { resolveOnPath } from "./subprocess.js";
  *   claude    acpx `--model` at `sessions new` (session/new `_meta`); ACP `set effort`
  *   codex     acpx `--model` at `sessions new`; ACP `set reasoning_effort`
  *   opencode  acpx `--model` at `sessions new`; ACP `set effort` (session-local variant)
+ *   omp       acpx `--model` at `sessions new`; ACP `set thinking` (session-local; omp's own
+ *             advertised thought level, see OMP_THINKING_LEVELS)
  *
  * Synthesis also requests `writeAccess`: native file-write / code-mode must be on for
  * this spawn, never by rewriting `~/.codex/config.toml` or other harness defaults.
@@ -37,7 +39,15 @@ import { resolveOnPath } from "./subprocess.js";
  */
 
 /** ACP session-config ids used only when that `set` is session-local, not a persist path. */
-const SESSION_LOCAL_EFFORT_KEYS = { codex: "reasoning_effort", claude: "effort", opencode: "effort" };
+const SESSION_LOCAL_EFFORT_KEYS = { codex: "reasoning_effort", claude: "effort", opencode: "effort", omp: "thinking" };
+
+/**
+ * omp's `thinking` session option levels, as the live adapter advertises them (acpx 0.19.4,
+ * omp 18.12.2, `sessions new` configOptions, 2026-10-19). acpx also accepts a value omp does
+ * not advertise (`thinking=medium` was stored and echoed back), so the advertised list is the
+ * guard: a level outside it is refused here rather than sent and assumed to apply.
+ */
+export const OMP_THINKING_LEVELS = ["off", "auto", "low", "high", "max"];
 
 /**
  * @typedef {{
@@ -90,6 +100,21 @@ export function prepareHarnessInvocation({ agent, model = null, effort = null, w
         acpxModel: requestedModel,
         setEffortKey: requestedEffort ? SESSION_LOCAL_EFFORT_KEYS[agent] : null,
         requiredBuiltinAgent: overlay ? agent : null,
+      };
+    } else if (agent === "omp") {
+      // omp is a configured custom acpx agent (`~/.acpx/config.json` agents.omp), not a
+      // replacement of a built-in, so no requiredBuiltinAgent: the built-in guard would
+      // refuse the one adapter backpass is told to use.
+      if (requestedEffort && !OMP_THINKING_LEVELS.includes(requestedEffort)) {
+        throw new UserError(
+          `omp cannot apply effort=${requestedEffort}: omp advertises thinking levels ${OMP_THINKING_LEVELS.join(", ")}`,
+          `use one of ${OMP_THINKING_LEVELS.join(", ")}, or omit the effort override`,
+        );
+      }
+      invocation = {
+        ...baseInvocation({ notes, dispose }),
+        acpxModel: requestedModel,
+        setEffortKey: requestedEffort ? SESSION_LOCAL_EFFORT_KEYS[agent] : null,
       };
     } else if (overlay) {
       throw new UserError(
