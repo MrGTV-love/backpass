@@ -1174,11 +1174,11 @@ test("an omp probe maps a bare ladder id to the openai-codex route", async () =>
 
 test("an omp probe keeps a provider-qualified ladder id when other routes are advertised too", async () => {
   const advertised = [
-    "openai/gpt-6-luna",
-    "openrouter/openai/gpt-6-luna",
+    "other-provider/gpt-6-luna",
+    "relay/other-provider/gpt-6-luna",
     "openai-codex/gpt-6-luna",
     "openai-codex/gpt-6.1-sol",
-    "openai/gpt-6.1-sol",
+    "other-provider/gpt-6.1-sol",
   ];
   const probe = async () => ({ verdict: "ok", detail: "", availableModels: advertised });
   for (const model of ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-sol"]) {
