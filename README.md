@@ -793,9 +793,31 @@ generation needs no release:
 | analysis  | medium | newest `gpt` luna via pi, opencode, codex | `sonnet` via claude | newest `grok` via pi, opencode, grok |
 | synthesis | high   | newest `gpt` sol via pi, opencode, codex  | `opus` via claude   | newest `grok` via pi, opencode, grok |
 
-`omp` (Oh My Pi) is also a runner: name it in a rung, for example `{ "model": "gpt-6-luna", "agents": ["omp"] }`.
+`omp` (Oh My Pi) is also a runner: name it in a rung. Write the model with its provider so omp gets that
+exact route, for example `openai-codex/gpt-6-luna` and not a bare `gpt-6-luna`:
+
+```json
+{
+  "ladders": {
+    "analysis": [
+      { "model": "openai-codex/gpt-6-luna", "agents": ["omp"] },
+      { "model": "deepseek/deepseek-v4-flash", "agents": ["omp"] },
+      { "model": "claude-sonnet-5-5[1m]", "agents": ["claude"] }
+    ],
+    "synthesis": [
+      { "model": "openai-codex/gpt-6.1-sol", "agents": ["omp"] },
+      { "model": "deepseek/deepseek-v4-flash", "agents": ["omp"] },
+      { "model": "claude-sonnet-5-5[1m]", "agents": ["claude"] }
+    ]
+  }
+}
+```
+
 Its model and reasoning level travel over acpx: `--model` at session create, and the ACP `thinking` session option
-(`off`, `auto`, `low`, `high`, `max`). A level omp does not advertise, such as `medium`, is refused before any call.
+(`off`, `auto`, `low`, `high`, `max`). A level you set that omp does not advertise, such as `medium`, is refused before any call.
+When no effort is set, omp runs at its own default thinking level and the announce line shows `effort=unset`; the
+role default `medium` for analysis is not sent to omp, while the role default `high` for synthesis is. To pin a level,
+set it: `--analysis-effort low` or `"analysis": { "effort": "low" }`.
 
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
 because its adapter accepts sessions while logged out). Session creation may wait up to three

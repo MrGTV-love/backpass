@@ -1306,3 +1306,19 @@ test("an omp probe maps a bare ladder id to the openai-codex route", async () =>
   const deepseek = await probeCandidate({ agent: "omp", model: "deepseek/deepseek-v4-flash" }, { probeSession: probe });
   assert.equal(deepseek.resolvedModel, "deepseek/deepseek-v4-flash");
 });
+
+test("an omp probe keeps a provider-qualified ladder id when other routes are advertised too", async () => {
+  const advertised = [
+    "openai/gpt-6-luna",
+    "openrouter/openai/gpt-6-luna",
+    "openai-codex/gpt-6-luna",
+    "openai-codex/gpt-6.1-sol",
+    "openai/gpt-6.1-sol",
+  ];
+  const probe = async () => ({ verdict: "ok", detail: "", availableModels: advertised });
+  for (const model of ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-sol"]) {
+    const result = await probeCandidate({ agent: "omp", model }, { probeSession: probe });
+    assert.equal(result.verdict, "ok");
+    assert.equal(result.resolvedModel, model);
+  }
+});
