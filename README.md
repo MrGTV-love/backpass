@@ -793,6 +793,10 @@ generation needs no release:
 | analysis  | medium | newest `gpt` luna via pi, opencode, codex | `sonnet` via claude | newest `grok` via pi, opencode, grok |
 | synthesis | high   | newest `gpt` sol via pi, opencode, codex  | `opus` via claude   | newest `grok` via pi, opencode, grok |
 
+`omp` (Oh My Pi) is also a runner: name it in a rung, for example `{ "model": "gpt-6-luna", "agents": ["omp"] }`.
+Its model and reasoning level travel over acpx: `--model` at session create, and the ACP `thinking` session option
+(`off`, `auto`, `low`, `high`, `max`). A level omp does not advertise, such as `medium`, is refused before any call.
+
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
 because its adapter accepts sessions while logged out). Session creation may wait up to three
 minutes for a cold-starting adapter; the remaining probe operations retain their shorter

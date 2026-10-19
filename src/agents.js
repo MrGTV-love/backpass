@@ -3,6 +3,7 @@ import { DEFAULT_EFFORT, LEGACY_DEFAULT_AGENTS } from "./config.js";
 import { newestInFamily } from "./model-family.js";
 import { AcpxError, SESSION_CREATE_TIMEOUT_MS, acpxVersion, classifyAcpxFailure, probeSession } from "./acpx.js";
 import { ambiguousModelDetail, providerAuthState, rankCollidingIds, readProviderAuthTypes } from "./provider-auth.js";
+import { OMP_THINKING_LEVELS } from "./harness-invoke.js";
 import { runCapture } from "./subprocess.js";
 
 /**
@@ -589,12 +590,19 @@ export class AgentResolver {
   }
 }
 
-/** OpenCode variants are per-model, so role defaults do not become an overlay. */
+/**
+ * OpenCode variants are per-model, so role defaults do not become an overlay. A role default
+ * that omp does not advertise (analysis `medium`) is not forced on omp; a default it does
+ * advertise (synthesis `high`) applies. A level the user sets is kept and checked by
+ * `src/harness-invoke.js`, never dropped here.
+ */
 export function resolvedEffort(role, agent, config) {
   const configured = config[role].effort;
   if (typeof configured === "string" && configured.trim()) return configured.trim();
   if (agent === "opencode") return null;
-  return DEFAULT_EFFORT[role];
+  const fallback = DEFAULT_EFFORT[role];
+  if (agent === "omp" && !OMP_THINKING_LEVELS.includes(fallback)) return null;
+  return fallback;
 }
 
 function describeTrail(trail) {

@@ -39,7 +39,7 @@ export function acpxAgentName(agent) {
  * (`src/harness-invoke.js`). Grok uses process `--reasoning-effort`. OpenCode
  * uses ACP `set effort`, which is session-local variant state.
  */
-export const EFFORT_OPTION_KEYS = { codex: "reasoning_effort", claude: "effort", opencode: "effort" };
+export const EFFORT_OPTION_KEYS = { codex: "reasoning_effort", claude: "effort", opencode: "effort", omp: "thinking" };
 
 export function effortOptionKey(agent) {
   return EFFORT_OPTION_KEYS[agent] || null;

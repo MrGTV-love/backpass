@@ -9,6 +9,7 @@ import {
   isProbeEntryFresh,
   probeCandidate,
   resolveModelId,
+  resolvedEffort,
 } from "../src/agents.js";
 import { AcpxError, acpxAgentName, classifyAcpxFailure, effortOptionKey, probeSession } from "../src/acpx.js";
 import { DEFAULT_LADDERS, loadConfig } from "../src/config.js";
@@ -1275,4 +1276,33 @@ test("acpx failure classification and the per-adapter tables", () => {
   assert.equal(effortOptionKey("opencode"), "effort");
   assert.equal(effortOptionKey("pi"), null, "Pi effort is process --thinking, not ACP set");
   assert.equal(effortOptionKey("grok"), null);
+  assert.equal(effortOptionKey("omp"), "thinking", "omp reasoning is the ACP thinking session option");
+});
+
+test("omp takes no default effort, keeps a configured level, and leaves the other agents' defaults alone", () => {
+  const unset = { analysis: { effort: null }, synthesis: { effort: null } };
+  assert.equal(resolvedEffort("analysis", "omp", unset), null, "medium is not an omp thinking level");
+  assert.equal(
+    resolvedEffort("synthesis", "omp", unset),
+    "high",
+    "high is an omp thinking level, so the default applies",
+  );
+  const configured = { analysis: { effort: "low" }, synthesis: { effort: "high" } };
+  assert.equal(resolvedEffort("analysis", "omp", configured), "low");
+  assert.equal(resolvedEffort("synthesis", "omp", configured), "high");
+  assert.equal(resolvedEffort("analysis", "pi", unset), "medium");
+  assert.equal(resolvedEffort("synthesis", "claude", unset), "high");
+  assert.equal(resolvedEffort("analysis", "opencode", unset), null);
+});
+
+test("an omp probe maps a bare ladder id to the openai-codex route", async () => {
+  const advertised = ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-sol", "deepseek/deepseek-v4-flash"];
+  const probe = async () => ({ verdict: "ok", detail: "", availableModels: advertised });
+  const luna = await probeCandidate({ agent: "omp", model: "gpt-6-luna" }, { probeSession: probe });
+  assert.equal(luna.verdict, "ok");
+  assert.equal(luna.resolvedModel, "openai-codex/gpt-6-luna");
+  const sol = await probeCandidate({ agent: "omp", model: "gpt-6.1-sol" }, { probeSession: probe });
+  assert.equal(sol.resolvedModel, "openai-codex/gpt-6.1-sol");
+  const deepseek = await probeCandidate({ agent: "omp", model: "deepseek/deepseek-v4-flash" }, { probeSession: probe });
+  assert.equal(deepseek.resolvedModel, "deepseek/deepseek-v4-flash");
 });
