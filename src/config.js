@@ -85,7 +85,8 @@ export const DEFAULT_CONFIG = {
   seed: null,
   /**
    * `agent: null` means auto-pick from `ladders[role]`; `effort: null` means
-   * `DEFAULT_EFFORT[role]`, except OpenCode which omits the overlay until effort
+   * `DEFAULT_EFFORT[role]`, except OpenCode, and omp when omp does not advertise that
+   * level (`resolvedEffort`, `src/agents.js`), which omit the overlay until effort
    * is set. Setting `agent` pins the role and skips the ladder.
    */
   analysis: { agent: null, model: null, effort: null },
