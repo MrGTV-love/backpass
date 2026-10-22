@@ -236,7 +236,53 @@ export function stripAcpxNoise(text) {
 }
 
 /**
+ * The index of the `}` that closes the object opened at `start`, or -1. Braces inside
+ * JSON strings do not count, so a quote like `"}{"` cannot end the object early.
+ */
+function closingBraceAt(text, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** The first balanced `{...}` span in `text` that parses as JSON, or null. */
+function firstJsonObject(text) {
+  for (let start = text.indexOf("{"); start !== -1; start = text.indexOf("{", start + 1)) {
+    const end = closingBraceAt(text, start);
+    if (end === -1) continue;
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      // Not this span; try the next opening brace.
+    }
+  }
+  return null;
+}
+
+/**
  * Pull a JSON object out of a model reply, tolerating prose or a fenced block around it.
+ *
+ * The object is taken as the first *balanced* span, not "everything from the first `{`
+ * to the last `}`". An ACP adapter has been seen to emit the final assistant message
+ * twice in one quiet-mode turn (omp), which makes the reply two identical objects back
+ * to back: the old first-to-last slice spans both and parses as neither, so a perfectly
+ * well-formed answer was recorded as "no parseable JSON".
  */
 export function extractJson(text) {
   const cleaned = stripAcpxNoise(text);
@@ -252,15 +298,8 @@ export function extractJson(text) {
     } catch {
       // fall through to brace scanning
     }
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        // keep trying
-      }
-    }
+    const parsed = firstJsonObject(trimmed);
+    if (parsed !== null) return parsed;
   }
   return null;
 }
