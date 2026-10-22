@@ -717,6 +717,19 @@ export async function synthesizeProposal({
   usage.push(usageRecord(ranWith, editResult));
   for (const note of editResult.notes || []) noteOnce(note);
 
+  // An edit turn that returns no text made no edits, but the cause is the harness,
+  // not the model's judgement: say so here rather than letting the annotate turn
+  // fail later and blame the edit turn for "making no changes".
+  if (isBlankOutput(editResult.text)) {
+    await holder.session.close();
+    throw new ProposalViolation(
+      `the synthesis edit turn produced no output at all - ${ranWith} never ran a turn (no prose, no tool call), so nothing was edited. ` +
+        `That usually means the harness could not reach its model (an expired login, a provider error): fix ${ranWith}, or pin a harness that works with --synthesis-agent.`,
+      [EMPTY_TURN_VIOLATION],
+      { reason: "edit-blank", attempts: 0, saved: null, proposalPath: null },
+    );
+  }
+
   let serial = 1;
   const freshSession = () =>
     openSession({
