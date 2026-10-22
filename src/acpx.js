@@ -169,6 +169,16 @@ const MODEL_REJECTED =
   /did not advertise that model|does not support this model|session\/set_(?:config_option|model) for model/i;
 
 /**
+ * What acpx prints when an adapter rejects the invocation-scoped effort overlay:
+ * `Agent rejected session/set_config_option for "reasoning_effort"="high": Invalid params
+ * (ACP -32602)`. That is a harness capability gap for this call - the level was refused,
+ * not the session - so it is classifiable: the resolver states the refusal and moves to
+ * the next candidate instead of dying on an unhandled acpx error.
+ */
+const EFFORT_REJECTED =
+  /session\/set_config_option[^\n]*(?:invalid params|-32602|not supported|unsupported|unknown option|invalid value)/i;
+
+/**
  * Availability verdicts for a failed acpx call. Only a *classifiable* failure is a
  * reason to drop a candidate and fall through to the next one; anything else (a
  * timeout on a long prompt, garbage output) stays a plain error so a run never
@@ -181,7 +191,7 @@ const MODEL_REJECTED =
  * that (it sends no prompt), so it is classified here.
  *
  * @param {{ stderr?: string, spawnError?: { code?: string } | null, timedOut?: boolean, emptyOutput?: boolean }} failure
- * @returns {"unauthenticated" | "model-unavailable" | "unreachable" | "empty-output" | null}
+ * @returns {"unauthenticated" | "model-unavailable" | "effort-rejected" | "unreachable" | "empty-output" | null}
  */
 export function classifyAcpxFailure(failure) {
   if (!failure) return null;
@@ -189,6 +199,7 @@ export function classifyAcpxFailure(failure) {
   const text = failure.stderr || "";
   if (/AUTH_REQUIRED|authentication required/i.test(text)) return "unauthenticated";
   if (MODEL_REJECTED.test(text)) return "model-unavailable";
+  if (EFFORT_REJECTED.test(text)) return "effort-rejected";
   if (/\b(ENOENT|command not found|not found on PATH|failed to spawn|spawn .* ENOENT)\b/i.test(text)) {
     return "unreachable";
   }
@@ -459,7 +470,7 @@ export async function acpxVersion({ timeoutMs = 10_000 } = {}) {
  * real auth gate (ACP -32000); for claude it is not, which is why `src/agents.js`
  * checks `claude auth status` before ever calling this.
  *
- * @returns {Promise<{ verdict: "ok" | "unauthenticated" | "model-unavailable" | "unreachable" | "timeout" | "empty-output",
+ * @returns {Promise<{ verdict: "ok" | "unauthenticated" | "model-unavailable" | "effort-rejected" | "unreachable" | "timeout" | "empty-output",
  *   detail: string, availableModels: string[], transient?: boolean }>}
  */
 export async function probeSession({

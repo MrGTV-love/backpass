@@ -1289,6 +1289,20 @@ test("acpx failure classification and the per-adapter tables", () => {
     }),
     "model-unavailable",
   );
+  assert.equal(
+    classifyAcpxFailure({
+      stderr: 'Agent rejected session/set_config_option for "reasoning_effort"="high": Invalid params (ACP -32602)',
+    }),
+    "effort-rejected",
+    "a rejected effort option is a harness capability gap, not a generic failure",
+  );
+  assert.equal(
+    classifyAcpxFailure({
+      stderr: 'Agent rejected session/set_config_option for "thinking"="high": Invalid params (ACP -32602)',
+    }),
+    "effort-rejected",
+    "the same refusal is classifiable for any adapter's effort option",
+  );
   assert.equal(classifyAcpxFailure({ spawnError: { code: "ENOENT" } }), "unreachable");
   assert.equal(classifyAcpxFailure({ stderr: "[acpx] error: TIMEOUT prompt exceeded 300s" }), null);
   assert.equal(classifyAcpxFailure({ stderr: "" }), null);
@@ -1487,4 +1501,70 @@ test("a mid-run model refusal is reported in the adapter's own words", async () 
     setLoggerSink(null);
     setQuiet(true);
   }
+});
+
+test("a harness that rejects the effort option falls through instead of crashing the run", async () => {
+  const lines = [];
+  setQuiet(false);
+  setLoggerSink((line) => lines.push(String(line)));
+  try {
+    const config = loadConfig(tmpRepo());
+    config.ladders.synthesis = [
+      { family: "gpt", tier: "sol", provider: "openai-codex", agents: ["codex"] },
+      { model: "opus", provider: "anthropic", agents: ["claude"] },
+    ];
+    const { resolver } = resolverWith(
+      {
+        "codex|family:openai-codex/gpt/sol": { resolvedModel: "gpt-6.1-sol" },
+        "claude|anthropic/opus": { resolvedModel: "opus" },
+      },
+      { config },
+    );
+    const rejection =
+      'Agent rejected session/set_config_option for "reasoning_effort"="high": Invalid params (ACP -32602)';
+    const result = await resolver.withFallthrough("synthesis", async (pick) => {
+      if (pick.agent === "codex") {
+        throw new AcpxError(`acpx codex could not apply invocation-scoped effort=high: ${rejection}`, {
+          stderr: `${rejection}\n`,
+          code: 1,
+        });
+      }
+      return `ran ${pick.agent}/${pick.model} effort=${pick.effort}`;
+    });
+
+    assert.equal(result, "ran claude/opus effort=high", "the next candidate runs");
+    const warning = lines.find((line) => /falling through/.test(line));
+    assert.ok(warning, "the refusal is announced");
+    assert.match(warning, /effort=high/, "the refused level is named");
+    assert.match(warning, /Invalid params \(ACP -32602\)/, "the adapter's own rejection is surfaced verbatim");
+    assert.ok(
+      lines.some((line) => /synthesis: claude \(opus\) effort=high/.test(line)),
+      "the level that actually ran is stated",
+    );
+  } finally {
+    setLoggerSink(null);
+    setQuiet(true);
+  }
+});
+
+test("a pinned harness that rejects the effort option reports it instead of throwing acpx out", async () => {
+  const config = loadConfig(tmpRepo({ synthesis: { agent: "codex", model: "gpt-5.6-sol", effort: "high" } }));
+  const { resolver } = resolverWith({ "codex|gpt-5.6-sol": { resolvedModel: "gpt-6.1-sol" } }, { config });
+  const rejection =
+    'Agent rejected session/set_config_option for "reasoning_effort"="high": Invalid params (ACP -32602)';
+  await assert.rejects(
+    () =>
+      resolver.withFallthrough("synthesis", async () => {
+        throw new AcpxError(`acpx codex could not apply invocation-scoped effort=high: ${rejection}`, {
+          stderr: `${rejection}\n`,
+          code: 1,
+        });
+      }),
+    (err) => {
+      assert.ok(err instanceof UserError, "a pinned capability gap is a user-facing error, not an AcpxError");
+      assert.match(err.message, /pinned synthesis agent codex/);
+      assert.match(err.message, /effort=high/);
+      return true;
+    },
+  );
 });

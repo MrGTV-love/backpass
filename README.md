@@ -849,9 +849,12 @@ durable verdicts are cached in
 `.backpass/agent-probe-cache.json` for 12h (30min for negatives). Pi and OpenCode entries
 are re-probed when their credential or auth-file state changes; `--force` re-probes every
 entry. The probe is a filter, not a promise: if the chosen harness answers `AUTH_REQUIRED`,
-rejects the model, or returns a clean exit with no output at all (a provider account out
-of quota or credits, often swallowed before it reaches stderr) mid-run, backpass falls
-through to the next candidate and says so.
+rejects the model, refuses the reasoning-effort option it was handed (`Invalid params` on
+`session/set_config_option`), or returns a clean exit with no output at all (a provider
+account out of quota or credits, often swallowed before it reaches stderr) mid-run,
+backpass states the refusal in the adapter's own words - naming the model or effort level
+it turned down - then falls through to the next candidate and announces what ran instead.
+A refused effort is never silently dropped to run the same model at another level.
 Model-turn timeouts never fall through, whether enforced by backpass or reported by acpx itself; in analysis, only that transcript fails and is retried next run, including with a pinned agent.
 A clean blank exit that consumed nearly the whole `--timeout` budget is also treated as a timeout, for compatibility with older acpx versions.
 When a whole ladder is exhausted the error lists every candidate with what to run to fix it.

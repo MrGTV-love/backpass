@@ -58,6 +58,7 @@ export const VERDICT_LABELS = {
   ok: "ok",
   unauthenticated: "not logged in",
   "model-unavailable": "model not available",
+  "effort-rejected": "rejected the effort override",
   unreachable: "not installed / not spawnable",
   timeout: "probe timed out",
   "empty-output": "returned no output",
@@ -663,12 +664,13 @@ function refuseUnnamedEffort(role, agent, why, hint) {
 /**
  * A mid-run refusal is announced in the adapter's own words, never paraphrased into a
  * generic verdict. `detail` is the AcpxError message, which begins with acpx's first
- * stderr line - the refusal sentence itself. acpx appends the whole advertised catalog
+ * stderr line - the refusal sentence itself, including the effort level or model it
+ * names. acpx appends the whole advertised catalog
  * after "Available models:", which belongs in the probe cache, not one terminal line, so
  * that tail is summarized rather than printed.
  */
 function refusalDetail(verdict, detail) {
-  if (verdict !== "model-unavailable") return "";
+  if (verdict !== "model-unavailable" && verdict !== "effort-rejected") return "";
   const line = String(detail || "")
     .split("\n")
     .find((candidate) => candidate.trim());
