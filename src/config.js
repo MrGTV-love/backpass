@@ -32,12 +32,12 @@ export const OPT_IN_HARNESSES = ["cursor-ide"];
  */
 export const DEFAULT_LADDERS = {
   analysis: [
-    { family: "gpt", tier: "luna", agents: ["pi", "opencode", "codex"] },
+    { family: "gpt", tier: "luna", agents: ["omp", "pi", "opencode", "codex"] },
     { model: "sonnet", agents: ["claude"] },
     { family: "grok", agents: ["pi", "opencode", "grok"] },
   ],
   synthesis: [
-    { family: "gpt", tier: "sol", agents: ["pi", "opencode", "codex"] },
+    { family: "gpt", tier: "sol", agents: ["omp", "pi", "opencode", "codex"] },
     { model: "opus", agents: ["claude"] },
     { family: "grok", agents: ["pi", "opencode", "grok"] },
   ],

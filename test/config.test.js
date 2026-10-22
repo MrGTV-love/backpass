@@ -36,12 +36,12 @@ test("the defaults match the approved design", () => {
   assert.deepEqual(config.synthesis, { agent: null, model: null, effort: null });
   assert.equal(config.autoAgent, true);
   assert.deepEqual(config.ladders.analysis, [
-    { family: "gpt", tier: "luna", agents: ["pi", "opencode", "codex"] },
+    { family: "gpt", tier: "luna", agents: ["omp", "pi", "opencode", "codex"] },
     { model: "sonnet", agents: ["claude"] },
     { family: "grok", agents: ["pi", "opencode", "grok"] },
   ]);
   assert.deepEqual(config.ladders.synthesis, [
-    { family: "gpt", tier: "sol", agents: ["pi", "opencode", "codex"] },
+    { family: "gpt", tier: "sol", agents: ["omp", "pi", "opencode", "codex"] },
     { model: "opus", agents: ["claude"] },
     { family: "grok", agents: ["pi", "opencode", "grok"] },
   ]);
