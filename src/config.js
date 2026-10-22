@@ -34,12 +34,12 @@ export const DEFAULT_LADDERS = {
   analysis: [
     { family: "gpt", tier: "luna", agents: ["omp", "pi", "opencode", "codex"] },
     { model: "sonnet", agents: ["claude"] },
-    { family: "grok", agents: ["pi", "opencode", "grok"] },
+    { family: "deepseek", tier: "flash", agents: ["omp"] },
   ],
   synthesis: [
     { family: "gpt", tier: "sol", agents: ["omp", "pi", "opencode", "codex"] },
     { model: "opus", agents: ["claude"] },
-    { family: "grok", agents: ["pi", "opencode", "grok"] },
+    { family: "deepseek", tier: "flash", agents: ["omp"] },
   ],
 };
 
