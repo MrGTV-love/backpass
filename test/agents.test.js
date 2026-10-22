@@ -1445,3 +1445,46 @@ test("the resolver refuses a pick whose role effort cannot be named", async () =
   );
   assert.equal((await resolver.resolve("synthesis")).effort, "high");
 });
+
+test("a mid-run model refusal is reported in the adapter's own words", async () => {
+  const lines = [];
+  setQuiet(false);
+  setLoggerSink((line) => lines.push(String(line)));
+  try {
+    const config = loadConfig(tmpRepo());
+    config.ladders.synthesis = [
+      { family: "gpt", tier: "sol", provider: "openai-codex", agents: ["omp"] },
+      { family: "gpt", tier: "sol", provider: "openai-codex", agents: ["codex"] },
+    ];
+    const { resolver } = resolverWith(
+      {
+        "omp|family:openai-codex/gpt/sol": { resolvedModel: "openai-codex/gpt-6.1-sol" },
+        "codex|family:openai-codex/gpt/sol": { resolvedModel: "gpt-6.1-sol" },
+      },
+      { config },
+    );
+    const refusal = 'Cannot apply --model "openai-codex/gpt-6.1-sol": the ACP agent did not advertise that model.';
+    const result = await resolver.withFallthrough("synthesis", async (pick) => {
+      if (pick.agent === "omp") {
+        throw new AcpxError(`acpx omp session create failed: ${refusal} Available models: a, b`, {
+          stderr: `${refusal} Available models: a, b\n`,
+          code: 1,
+        });
+      }
+      return `${pick.agent}/${pick.model}`;
+    });
+
+    assert.equal(result, "codex/gpt-6.1-sol", "the next candidate runs");
+    const warning = lines.find((line) => /falling through/.test(line));
+    assert.ok(warning, "the demotion is announced");
+    assert.match(
+      warning,
+      /Cannot apply --model "openai-codex\/gpt-6\.1-sol": the ACP agent did not advertise that model\./,
+      "acpx's refusal reaches the user verbatim",
+    );
+    assert.doesNotMatch(warning, /model not available/, "the refusal is never paraphrased into a verdict label");
+  } finally {
+    setLoggerSink(null);
+    setQuiet(true);
+  }
+});

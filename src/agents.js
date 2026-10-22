@@ -586,7 +586,9 @@ export class AgentResolver {
       const cache = await this.loadCache();
       cache.entries[key] = entry;
       this.saveCache();
-      warn(`${role}: ${pick.agent} (${pick.model}) ${VERDICT_LABELS[verdict] || verdict} mid-run; falling through`);
+      const refusal = refusalDetail(verdict, detail);
+      const label = refusal ? `refused mid-run${refusal}` : `${VERDICT_LABELS[verdict] || verdict} mid-run`;
+      warn(`${role}: ${pick.agent} (${pick.model}) ${label}; falling through`);
     }
     if (this.picks[role] === pick) delete this.picks[role];
     return true;
@@ -656,6 +658,26 @@ export function resolvedEffort(role, agent, config) {
 /** @returns {never} */
 function refuseUnnamedEffort(role, agent, why, hint) {
   throw new UserError(`the ${role} pass has no explicit effort for ${agent}: ${why}`, hint);
+}
+
+/**
+ * A mid-run refusal is announced in the adapter's own words, never paraphrased into a
+ * generic verdict. `detail` is the AcpxError message, which begins with acpx's first
+ * stderr line - the refusal sentence itself. acpx appends the whole advertised catalog
+ * after "Available models:", which belongs in the probe cache, not one terminal line, so
+ * that tail is summarized rather than printed.
+ */
+function refusalDetail(verdict, detail) {
+  if (verdict !== "model-unavailable") return "";
+  const line = String(detail || "")
+    .split("\n")
+    .find((candidate) => candidate.trim());
+  if (!line) return "";
+  const refusal = line.replace(
+    /\s*Available models:[\s\S]*$/i,
+    " (available models are in .backpass/agent-probe-cache.json)",
+  );
+  return ` (${refusal})`;
 }
 
 function describeTrail(trail) {
