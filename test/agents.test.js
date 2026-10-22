@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   AgentResolver,
   candidateKey,
+  candidateLabel,
   flattenLadder,
   isProbeEntryFresh,
   probeCandidate,
@@ -53,6 +54,32 @@ function scriptedProbe(verdicts) {
 }
 
 /**
+ * Resolution fixtures for the model-id rung path. The shipped ladders name families
+ * and resolve a generation from the catalog; the walk order, caching, and fall-through
+ * tests below are about the resolver itself, so they pin this equivalent model ladder
+ * instead of depending on whichever generation is newest today. The family-rung path
+ * has its own tests.
+ */
+const TEST_LADDERS = {
+  analysis: [
+    { model: "gpt-5.6-luna", agents: ["pi", "opencode", "codex"] },
+    { model: "claude-sonnet-5", agents: ["claude"] },
+    { model: "grok-4.6", agents: ["pi", "opencode", "grok"] },
+  ],
+  synthesis: [
+    { model: "gpt-5.6-sol", agents: ["pi", "opencode", "codex"] },
+    { model: "claude-opus-5", agents: ["claude"] },
+    { model: "grok-4.6", agents: ["pi", "opencode", "grok"] },
+  ],
+};
+
+function testConfig() {
+  const config = loadConfig(tmpRepo());
+  config.ladders = structuredClone(TEST_LADDERS);
+  return config;
+}
+
+/**
  * @param {Record<string, any>} verdicts
  * @param {{ config?: any, state?: ReturnType<typeof memoryState>, now?: () => number,
  *   bypassCache?: boolean, acpxVersion?: () => Promise<string | null>,
@@ -61,7 +88,7 @@ function scriptedProbe(verdicts) {
  */
 function resolverWith(
   verdicts,
-  { config = loadConfig(tmpRepo()), state = memoryState(), sleep = async () => {}, ...deps } = {},
+  { config = testConfig(), state = memoryState(), sleep = async () => {}, ...deps } = {},
 ) {
   const { probe, calls } = scriptedProbe(verdicts);
   const resolver = new AgentResolver(config, {
@@ -102,19 +129,127 @@ function emptyOutput(agent, model, stderr = "") {
 
 test("the ladders flatten model-outer, harness-inner, in the captain's order", () => {
   assert.deepEqual(
-    flattenLadder(DEFAULT_LADDERS.analysis).map((c) => `${c.model}@${c.agent}`),
-    [
-      "gpt-5.6-luna@pi",
-      "gpt-5.6-luna@opencode",
-      "gpt-5.6-luna@codex",
-      "claude-sonnet-5@claude",
-      "grok-4.6@pi",
-      "grok-4.6@opencode",
-      "grok-4.6@grok",
-    ],
+    flattenLadder(DEFAULT_LADDERS.analysis).map((c) => `${candidateLabel(c)}@${c.agent}`),
+    ["gpt/luna@pi", "gpt/luna@opencode", "gpt/luna@codex", "sonnet@claude", "grok@pi", "grok@opencode", "grok@grok"],
   );
-  assert.equal(flattenLadder(DEFAULT_LADDERS.synthesis)[0].model, "gpt-5.6-sol");
-  assert.equal(flattenLadder(DEFAULT_LADDERS.synthesis)[3].model, "claude-opus-5");
+  assert.equal(candidateLabel(flattenLadder(DEFAULT_LADDERS.synthesis)[0]), "gpt/sol");
+  assert.equal(candidateLabel(flattenLadder(DEFAULT_LADDERS.synthesis)[3]), "opus");
+});
+
+test("a family rung takes the newest generation the harness advertises, at probe time", async () => {
+  const config = loadConfig(tmpRepo());
+  config.ladders.analysis = [{ family: "gpt", tier: "sol", agents: ["pi"] }];
+  const advertised = ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-luna", "openai-codex/gpt-5.6-sol"];
+  const resolver = new AgentResolver(config, {
+    state: memoryState(),
+    acpxVersion: async () => "0.13.0",
+    probeCandidate: (candidate, options) =>
+      probeCandidate(candidate, {
+        ...options,
+        probeSession: async () => ({ verdict: "ok", detail: "", availableModels: advertised }),
+      }),
+  });
+
+  const pick = await resolver.resolve("analysis");
+  assert.equal(pick.agent, "pi");
+  assert.equal(pick.model, "openai-codex/gpt-6.1-sol", "the catalog's newest tier member wins");
+  assert.equal(pick.family, "gpt");
+  assert.equal(pick.tier, "sol");
+  assert.equal(pick.ladderModel, undefined, "a family rung has no bare id of its own");
+});
+
+test("a family rung with no catalog match falls through to the next rung", async () => {
+  const config = loadConfig(tmpRepo());
+  config.ladders.analysis = [
+    { family: "gpt", tier: "sol", agents: ["pi"] },
+    { family: "grok", agents: ["pi"] },
+  ];
+  const catalogs = {
+    "family:gpt/sol": ["openai-codex/gpt-6.1-luna"],
+    "family:grok/": ["openai-codex/gpt-6.1-luna", "xai/grok-4.6"],
+  };
+  const resolver = new AgentResolver(config, {
+    state: memoryState(),
+    acpxVersion: async () => "0.13.0",
+    probeCandidate: (candidate, options) =>
+      probeCandidate(candidate, {
+        ...options,
+        probeSession: async () => ({
+          verdict: "ok",
+          detail: "",
+          availableModels:
+            catalogs[candidate.family ? `family:${candidate.family}/${candidate.tier ?? ""}` : candidate.model],
+        }),
+      }),
+  });
+
+  const pick = await resolver.resolve("analysis");
+  assert.equal(pick.model, "xai/grok-4.6");
+  assert.equal(pick.family, "grok");
+  assert.match(pick.reason, /pi\/gpt\/sol \(model not available\)/, "the skipped family rung renders family/tier");
+});
+
+test("a family rung demoted mid-run is skipped by the next walk, not re-chosen", { timeout: 10_000 }, async () => {
+  const config = loadConfig(tmpRepo());
+  config.ladders.analysis = [
+    { family: "gpt", tier: "sol", agents: ["pi"] },
+    { family: "grok", agents: ["pi"] },
+  ];
+  const resolver = new AgentResolver(config, {
+    state: memoryState(),
+    acpxVersion: async () => "0.13.0",
+    probeCandidate: (candidate, options) =>
+      probeCandidate(candidate, {
+        ...options,
+        probeSession: async () => ({
+          verdict: "ok",
+          detail: "",
+          availableModels: ["openai-codex/gpt-6.1-sol", "xai/grok-4.6"],
+        }),
+      }),
+  });
+
+  const attempts = [];
+  const result = await resolver.withFallthrough("analysis", async (pick) => {
+    attempts.push(candidateLabel(pick));
+    if (pick.family === "gpt") {
+      throw new AcpxError('Cannot apply --model "x": the ACP agent did not advertise that model.', {
+        stderr: 'Cannot apply --model "x": the ACP agent did not advertise that model.',
+        code: 1,
+      });
+    }
+    return "evidence";
+  });
+  assert.equal(result, "evidence");
+  assert.deepEqual(attempts, ["gpt/sol", "grok"]);
+  assert.equal((await resolver.resolve("analysis")).family, "grok", "the demotion is remembered for the run");
+});
+
+test("an exhausted ladder of family rungs names each rung as family/tier", async () => {
+  const config = loadConfig(tmpRepo());
+  config.ladders.synthesis = [
+    { family: "gpt", tier: "sol", agents: ["pi"] },
+    { family: "grok", agents: ["grok"] },
+  ];
+  const { resolver } = resolverWith(
+    {
+      "pi|family:gpt/sol": "unauthenticated",
+      "grok|family:grok/": "timeout",
+    },
+    { config },
+  );
+  await assert.rejects(
+    () => resolver.resolve("synthesis"),
+    (err) => {
+      assert.ok(err instanceof UserError);
+      assert.match(err.message, /no available agent for the synthesis pass/);
+      assert.match(err.message, /gpt\/sol\s+pi\s+not logged in.*pi login/);
+      assert.match(err.message, /grok\s+grok\s+probe timed out/);
+      assert.doesNotMatch(err.message, /undefined/);
+      assert.match(err.hint, /--synthesis-agent <agent> --synthesis-model <id>/);
+      return true;
+    },
+  );
 });
 
 test("ordered selection picks the first available+authed candidate per role", async () => {

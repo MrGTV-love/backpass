@@ -1,5 +1,6 @@
 import { UserError, color, info, warn } from "./logger.js";
 import { DEFAULT_EFFORT, LEGACY_DEFAULT_AGENTS } from "./config.js";
+import { newestInFamily } from "./model-family.js";
 import { AcpxError, SESSION_CREATE_TIMEOUT_MS, acpxVersion, classifyAcpxFailure, probeSession } from "./acpx.js";
 import { ambiguousModelDetail, providerAuthState, rankCollidingIds, readProviderAuthTypes } from "./provider-auth.js";
 import { runCapture } from "./subprocess.js";
@@ -14,9 +15,12 @@ import { runCapture } from "./subprocess.js";
  * real call is the decider, and a classifiable failure there (AUTH_REQUIRED, model
  * rejected, adapter missing) demotes the candidate and falls through to the next one.
  *
- * Bare ladder ids are matched against the advertised list (`resolveModelId`). A unique
- * `provider/id` wins; a collision is ranked by auth class (subscription over API key)
- * from `src/provider-auth.js`. An unrankable collision is a loud non-match that names
+ * Bare ladder ids are matched against the advertised list (`resolveModelId`). A family
+ * rung (`{ family, tier }`) carries no id at all: its newest matching generation is
+ * picked from that same advertised list at probe time (`newestInFamily`), so a newer
+ * model in the family is used without a release. A unique `provider/id` wins; a
+ * collision is ranked by auth class (subscription over API key) from
+ * `src/provider-auth.js`. An unrankable collision is a loud non-match that names
  * the ids - never an arbitrary pick, and never silent fallthrough disguised as
  * "model not available".
  *
@@ -96,7 +100,7 @@ const NATIVE_PROBES = {
     }
     return null;
   },
-  async opencode({ model }, capture, options = {}) {
+  async opencode(candidate, capture, options = {}) {
     const result = await capture("opencode", ["models"], { timeoutMs: NATIVE_TIMEOUT_MS });
     if (result.spawnError?.code === "ENOENT") {
       return { verdict: "unreachable", detail: "opencode CLI not found on PATH" };
@@ -110,13 +114,13 @@ const NATIVE_PROBES = {
     if (!advertised.length) {
       return { verdict: "model-unavailable", detail: "`opencode models` advertised no models" };
     }
-    const resolved = resolveAdvertisedModel(model, advertised, "opencode", options);
+    const resolved = resolveCandidateModel(candidate, advertised, "opencode", options);
     if (!resolved.id) {
       return {
         verdict: "model-unavailable",
         detail: resolved.ambiguous
           ? ambiguousModelDetail(resolved.ambiguous, { source: "`opencode models`" })
-          : "absent from `opencode models` (provider not logged in?)",
+          : absentDetail(candidate, advertised, { source: "`opencode models`" }),
       };
     }
     return null;
@@ -131,10 +135,10 @@ function firstLine(text) {
  * Match a model id against what an adapter advertises (design section 4.1): exact,
  * then a unique match after the provider prefix (`openai-codex/x`,
  * `openrouter/vendor/x`), then a unique `x[...]` variant. Equality is deliberate:
- * `gpt-5.6-luna-fast`
- * must not satisfy `gpt-5.6-luna`. More than one survivor is ranked by auth class
- * (subscription over API key) when `providerAuthTypes` can decide; otherwise it is
- * a loud non-match that names the ids - never an arbitrary pick.
+ * a `-fast` variant must not satisfy the bare id it decorates. More than one survivor
+ * is ranked by auth class (subscription over API key) when `providerAuthTypes` can
+ * decide; otherwise it is a loud non-match that names the ids - never an arbitrary
+ * pick.
  *
  * @param {string} bareId
  * @param {string[]} advertised
@@ -163,20 +167,65 @@ function resolveAdvertisedModel(bareId, advertised, agent, options = {}) {
   return resolveModelId(bareId, advertised, { providerAuthTypes: types });
 }
 
-/** Flatten a ladder model-outer / harness-inner into `{ model, agent }` candidates. */
-export function flattenLadder(ladder) {
-  return ladder.flatMap((rung) => rung.agents.map((agent) => ({ model: rung.model, agent })));
+/**
+ * Resolve one rung against a catalog. A family rung picks the newest advertised id in
+ * its family/tier; a model rung goes through the bare-id matcher (and its auth-class
+ * tie-break). `ambiguous` is only ever produced by the model path.
+ */
+function resolveCandidateModel(candidate, advertised, agent, options = {}) {
+  if (candidate.family) {
+    const id = newestInFamily(advertised, candidate.family, candidate.tier);
+    return { id };
+  }
+  return resolveAdvertisedModel(candidate.model, advertised, agent, options);
 }
 
-export function candidateKey({ agent, model }) {
+/**
+ * @param {{ model?: string, family?: string, tier?: string }} candidate
+ * @param {string[]} advertised
+ * @param {{ source?: string }} [options]
+ */
+function absentDetail(candidate, advertised, { source } = {}) {
+  if (!advertised.length) {
+    return source ? `${source} advertised no models` : "adapter advertised no models";
+  }
+  if (candidate.family) {
+    const rung = candidateLabel(candidate);
+    return `no advertised model matches ${rung} among ${advertised.length} advertised model(s)`;
+  }
+  return source
+    ? `absent from ${source} (provider not logged in?)`
+    : `not among ${advertised.length} advertised model(s)`;
+}
+
+/**
+ * How a rung is described when its model id is not known yet (`gpt/sol`).
+ * @param {{ model?: string, family?: string, tier?: string }} candidate
+ */
+export function candidateLabel({ model, family, tier }) {
+  if (family) return tier ? `${family}/${tier}` : family;
+  return model ?? "";
+}
+
+/** Flatten a ladder model-outer / harness-inner into `{ model, family, tier, agent }`. */
+export function flattenLadder(ladder) {
+  return ladder.flatMap((rung) =>
+    rung.agents.map((agent) => ({ model: rung.model, family: rung.family, tier: rung.tier, agent })),
+  );
+}
+
+export function candidateKey({ agent, model, family, tier }) {
+  if (family) return `${agent}|family:${family}/${tier ?? ""}`;
   return `${agent}|${model}`;
 }
 
 /**
  * Probe one candidate end to end: native status command first (when one exists),
- * then the zero-token acpx session probe, then model-id resolution.
+ * then the zero-token acpx session probe, then model-id resolution. A family rung is
+ * resolved from `availableModels` here - the catalog is the only authority for which
+ * generation exists.
  *
- * @param {{ agent: string, model: string }} candidate
+ * @param {{ agent: string, model?: string, family?: string, tier?: string }} candidate
  * @param {{ cwd?: string, sessionName?: string,
  *   probeSession?: (args: { agent: string, sessionName: string, cwd?: string,
  *     timeoutMs?: number, createTimeoutMs?: number }) =>
@@ -212,17 +261,20 @@ export async function probeCandidate(candidate, options = {}) {
     };
   }
 
+  const advertised = result.availableModels || [];
+  if (candidate.family) {
+    const id = newestInFamily(advertised, candidate.family, candidate.tier);
+    if (!id) {
+      return { verdict: "model-unavailable", detail: absentDetail(candidate, advertised), resolvedModel: null };
+    }
+    return { verdict: "ok", detail: "", resolvedModel: id };
+  }
   if (TRUSTING_MODEL_AGENTS.has(agent)) {
     return { verdict: "ok", detail: "model accepted on faith; the first real call verifies it", resolvedModel: model };
   }
-  const advertised = result.availableModels || [];
   const resolved = resolveAdvertisedModel(model, advertised, agent, options);
   if (!resolved.id) {
-    const detail = resolved.ambiguous
-      ? ambiguousModelDetail(resolved.ambiguous)
-      : advertised.length
-        ? `not among ${advertised.length} advertised model(s)`
-        : "adapter advertised no models";
+    const detail = resolved.ambiguous ? ambiguousModelDetail(resolved.ambiguous) : absentDetail(candidate, advertised);
     return { verdict: "model-unavailable", detail, resolvedModel: null };
   }
   const tieBreak = resolved.tieBreak;
@@ -409,7 +461,8 @@ export class AgentResolver {
 
   /**
    * @param {"analysis" | "synthesis"} role
-   * @returns {Promise<{ agent: string, model: string | null, ladderModel?: string, effort: string | null, pinned: boolean, reason: string }>}
+   * @returns {Promise<{ agent: string, model: string | null, ladderModel?: string, family?: string,
+   *   tier?: string, effort: string | null, pinned: boolean, reason: string }>}
    */
   async resolve(role) {
     if (this.picks[role]) return this.picks[role];
@@ -448,6 +501,7 @@ export class AgentResolver {
           agent: candidate.agent,
           model: entry.resolvedModel || candidate.model,
           ladderModel: candidate.model,
+          ...(candidate.family ? { family: candidate.family, tier: candidate.tier } : {}),
           effort: resolvedEffort(role, candidate.agent, this.config),
           pinned: false,
           reason: describeTrail(trail),
@@ -474,7 +528,7 @@ export class AgentResolver {
     for (const t of losers) {
       const label = VERDICT_LABELS[t.verdict] || t.verdict;
       const extra = t.detail && /ambiguous/i.test(t.detail) ? ` (${t.detail})` : "";
-      info(color.dim(`    skipped ${t.agent}/${t.model}: ${label}${extra}`));
+      info(color.dim(`    skipped ${t.agent}/${candidateLabel(t)}: ${label}${extra}`));
     }
   }
 
@@ -485,7 +539,12 @@ export class AgentResolver {
    */
   async demote(role, pick, verdict, detail = "", stderr = "") {
     if (pick.pinned) return false;
-    const key = candidateKey({ agent: pick.agent, model: pick.ladderModel });
+    const key = candidateKey({
+      agent: pick.agent,
+      model: pick.ladderModel,
+      family: pick.family,
+      tier: pick.tier,
+    });
     if (this.memo.get(key)?.verdict === "ok") {
       // First worker to see the failure records it; the rest just re-resolve.
       const authState = PROVIDER_AUTH_SENSITIVE_AGENTS.has(pick.agent) ? this.providerAuthState(pick.agent) : null;
@@ -541,7 +600,9 @@ export function resolvedEffort(role, agent, config) {
 function describeTrail(trail) {
   const losers = trail.filter((t) => t.verdict !== "ok");
   if (!losers.length) return "first candidate in the ladder";
-  return `after skipping ${losers.map((t) => `${t.agent}/${t.model} (${VERDICT_LABELS[t.verdict] || t.verdict})`).join(", ")}`;
+  return `after skipping ${losers
+    .map((t) => `${t.agent}/${candidateLabel(t)} (${VERDICT_LABELS[t.verdict] || t.verdict})`)
+    .join(", ")}`;
 }
 
 function pinnedResolutionError(role, pick, entry) {
@@ -572,11 +633,11 @@ function pinnedFailureError(role, pick, verdict, err) {
 }
 
 function exhaustedError(role, trail) {
-  const width = Math.max(...trail.map((t) => t.model.length));
+  const width = Math.max(...trail.map((t) => candidateLabel(t).length));
   const lines = trail.map((t) => {
     const label = VERDICT_LABELS[t.verdict] || t.verdict;
     const hint = hintFor(t.agent, t.verdict, t.stderr);
-    return `  ${t.model.padEnd(width)}  ${t.agent.padEnd(9)} ${label}${t.detail ? ` (${t.detail})` : ""}${hint ? `  ${hint}` : ""}`;
+    return `  ${candidateLabel(t).padEnd(width)}  ${t.agent.padEnd(9)} ${label}${t.detail ? ` (${t.detail})` : ""}${hint ? `  ${hint}` : ""}`;
   });
   // "log in" is only true advice when something in the trail is actually an auth
   // failure - an all-"empty-output" trail (exhausted credits) needs its own line, not

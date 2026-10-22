@@ -783,13 +783,15 @@ with `--theme dark|light` or `"theme"` in `.backpassrc.json`.
 
 Cheap analysis, smart synthesis. Both go through acpx, so backpass uses the harnesses you
 already have - and by default it works out which ones those are. Each pass has an ordered
-ladder of candidates, and the first one that is installed, logged in, and serves the model
-wins:
+ladder of candidates, and the first one that is installed, logged in, and serves its rung
+wins. A rung names either a family plus tier or a bare alias; a family rung is resolved to
+the newest model that harness advertises in that family and tier at probe time, so a new
+generation needs no release:
 
-| pass      | effort | 1st                                    | 2nd                          | 3rd                               |
-| --------- | ------ | -------------------------------------- | ---------------------------- | --------------------------------- |
-| analysis  | medium | `gpt-5.6-luna` via pi, opencode, codex | `claude-sonnet-5` via claude | `grok-4.6` via pi, opencode, grok |
-| synthesis | high   | `gpt-5.6-sol` via pi, opencode, codex  | `claude-opus-5` via claude   | `grok-4.6` via pi, opencode, grok |
+| pass      | effort | 1st                                       | 2nd                 | 3rd                                  |
+| --------- | ------ | ----------------------------------------- | ------------------- | ------------------------------------ |
+| analysis  | medium | newest `gpt` luna via pi, opencode, codex | `sonnet` via claude | newest `grok` via pi, opencode, grok |
+| synthesis | high   | newest `gpt` sol via pi, opencode, codex  | `opus` via claude   | newest `grok` via pi, opencode, grok |
 
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
 because its adapter accepts sessions while logged out). Session creation may wait up to three
@@ -806,13 +808,15 @@ Model-turn timeouts never fall through, whether enforced by backpass or reported
 A clean blank exit that consumed nearly the whole `--timeout` budget is also treated as a timeout, for compatibility with older acpx versions.
 When a whole ladder is exhausted the error lists every candidate with what to run to fix it.
 
-Bare model ids are resolved against what each adapter advertises (`openai-codex/gpt-5.6-luna`
-on pi, `openai/gpt-5.6-luna` on opencode, `gpt-5.6-luna` on codex), so nothing is hardcoded
-per harness. When the same bare id is advertised under more than one provider, backpass
-ranks by auth class - a subscription/OAuth provider over an API-key provider - from that
-harness's provider definitions and auth file (see `src/provider-auth.js`). An unrankable
-collision is refused with the colliding ids named; it is never an arbitrary pick. Ladders
-are ordinary config - reorder or shorten them under `"ladders"`.
+Bare model ids are resolved against what each adapter advertises, and a family rung is
+resolved from that same catalog (`src/model-family.js`): the newest advertised id whose
+family and, when the rung names one, tier match. Nothing is hardcoded per harness, and a
+family rung with no advertised match is skipped and reported as model not available.
+When the same bare id is advertised under more than one provider, backpass ranks by auth
+class - a subscription/OAuth provider over an API-key provider - from that harness's
+provider definitions and auth file (see `src/provider-auth.js`). An unrankable collision
+is refused with the colliding ids named; it is never an arbitrary pick. Ladders are
+ordinary config - reorder or shorten them under `"ladders"`.
 
 Pinning an agent skips its candidate ladder. A bare pinned model id is still resolved
 against that harness's advertised models, including the same collision handling above.
@@ -822,7 +826,7 @@ keeps the pin rather than falling through or printing a raw stack:
 ```sh
 backpass \
   --analysis-agent codex  --analysis-model gpt-5.5        --analysis-effort low \
-  --synthesis-agent claude --synthesis-model claude-opus-5 --synthesis-effort high
+  --synthesis-agent claude --synthesis-model opus --synthesis-effort high
 ```
 
 `--no-auto-agent` pins the pre-ladder defaults (codex / claude). Model and effort
@@ -853,14 +857,14 @@ CLI flags on top:
   "synthesis": { "agent": null, "model": null, "effort": null },
   "ladders": {
     "analysis": [
-      { "model": "gpt-5.6-luna", "agents": ["pi", "opencode", "codex"] },
-      { "model": "claude-sonnet-5", "agents": ["claude"] },
-      { "model": "grok-4.6", "agents": ["pi", "opencode", "grok"] }
+      { "family": "gpt", "tier": "luna", "agents": ["pi", "opencode", "codex"] },
+      { "model": "sonnet", "agents": ["claude"] },
+      { "family": "grok", "agents": ["pi", "opencode", "grok"] }
     ],
     "synthesis": [
-      { "model": "gpt-5.6-sol", "agents": ["pi", "opencode", "codex"] },
-      { "model": "claude-opus-5", "agents": ["claude"] },
-      { "model": "grok-4.6", "agents": ["pi", "opencode", "grok"] }
+      { "family": "gpt", "tier": "sol", "agents": ["pi", "opencode", "codex"] },
+      { "model": "opus", "agents": ["claude"] },
+      { "family": "grok", "agents": ["pi", "opencode", "grok"] }
     ]
   },
   "discovery": {

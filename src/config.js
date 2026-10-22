@@ -14,26 +14,32 @@ export const OPT_IN_HARNESSES = ["cursor-ide"];
 
 /**
  * The ordered candidate ladders behind the auto-pick (ordered-defaults design, section 8.2).
- * Each rung is one model id served by several harnesses in preference order; rungs are
+ * Each rung names a model served by several harnesses in preference order; rungs are
  * flattened model-outer / harness-inner, and the first candidate that is installed,
- * authenticated, and serves the model wins. Model ids are the bare ids the vendors use;
- * per-harness spellings (`openai-codex/...`, `openai/...`, `xai/...`) are resolved at
- * probe time against what the adapter advertises - never hard-coded. A collision of the
- * same bare id under two providers is ranked by auth class (subscription over API key;
- * see `src/provider-auth.js`); an unrankable collision is refused, not guessed. Ladders
- * live in config so a user can reorder or shorten them in `.backpassrc.json` without a
- * release.
+ * authenticated, and serves the model wins.
+ *
+ * A rung is either a bare `model` id or a `family` plus optional `tier`
+ * (`{ family: "gpt", tier: "sol" }`). A family rung carries no generation: the newest
+ * matching id is resolved at probe time from what the adapter advertises
+ * (`src/model-family.js`), so a newer model in that family/tier is picked up with no
+ * release. Ids and per-harness spellings (`openai-codex/...`, `openai/...`, `xai/...`)
+ * are resolved the same way - never hard-coded. A collision of the same bare id under
+ * two providers is ranked by auth class (subscription over API key; see
+ * `src/provider-auth.js`); an unrankable collision is refused, not guessed. Ladders live
+ * in config so a user can reorder or shorten them in `.backpassrc.json` without a
+ * release. `sonnet` and `opus` are the harness's own unversioned aliases: the harness
+ * keeps them current, so they need no family rung.
  */
 export const DEFAULT_LADDERS = {
   analysis: [
-    { model: "gpt-5.6-luna", agents: ["pi", "opencode", "codex"] },
-    { model: "claude-sonnet-5", agents: ["claude"] },
-    { model: "grok-4.6", agents: ["pi", "opencode", "grok"] },
+    { family: "gpt", tier: "luna", agents: ["pi", "opencode", "codex"] },
+    { model: "sonnet", agents: ["claude"] },
+    { family: "grok", agents: ["pi", "opencode", "grok"] },
   ],
   synthesis: [
-    { model: "gpt-5.6-sol", agents: ["pi", "opencode", "codex"] },
-    { model: "claude-opus-5", agents: ["claude"] },
-    { model: "grok-4.6", agents: ["pi", "opencode", "grok"] },
+    { family: "gpt", tier: "sol", agents: ["pi", "opencode", "codex"] },
+    { model: "opus", agents: ["claude"] },
+    { family: "grok", agents: ["pi", "opencode", "grok"] },
   ],
 };
 
@@ -450,11 +456,26 @@ function validate(config, { kind = "project", repoRoot = null } = {}) {
     }
     const ladder = config.ladders?.[role];
     if (!Array.isArray(ladder) || ladder.length === 0) {
-      throw new UserError(`config.ladders.${role} must be a non-empty array of { model, agents } rungs`);
+      throw new UserError(`config.ladders.${role} must be a non-empty array of rungs`);
     }
     for (const rung of ladder) {
-      if (!rung || typeof rung.model !== "string" || !Array.isArray(rung.agents) || !rung.agents.length) {
-        throw new UserError(`config.ladders.${role} rungs must look like { "model": "<id>", "agents": ["<harness>"] }`);
+      const shape =
+        '{ "model": "<id>", "agents": ["<harness>"] } or { "family": "<name>", "tier": "<tier>", "agents": ["<harness>"] }';
+      if (!rung || typeof rung !== "object" || !Array.isArray(rung.agents) || !rung.agents.length) {
+        throw new UserError(`config.ladders.${role} rungs must look like ${shape}`);
+      }
+      const hasModel = typeof rung.model === "string" && Boolean(rung.model.trim());
+      const hasFamily = typeof rung.family === "string" && Boolean(rung.family.trim());
+      if (hasModel === hasFamily) {
+        throw new UserError(`config.ladders.${role} rungs must set exactly one of "model" or "family": ${shape}`);
+      }
+      if (rung.tier !== undefined) {
+        if (!hasFamily) {
+          throw new UserError(`config.ladders.${role} rung sets "tier" without "family": ${shape}`);
+        }
+        if (typeof rung.tier !== "string" || !rung.tier.trim()) {
+          throw new UserError(`config.ladders.${role} rung "tier" must be a non-empty string: ${shape}`);
+        }
       }
     }
   }

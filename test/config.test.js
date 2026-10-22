@@ -35,14 +35,16 @@ test("the defaults match the approved design", () => {
   assert.deepEqual(config.analysis, { agent: null, model: null, effort: null }, "agents are auto-picked by default");
   assert.deepEqual(config.synthesis, { agent: null, model: null, effort: null });
   assert.equal(config.autoAgent, true);
-  assert.deepEqual(
-    config.ladders.analysis.map((r) => r.model),
-    ["gpt-5.6-luna", "claude-sonnet-5", "grok-4.6"],
-  );
-  assert.deepEqual(
-    config.ladders.synthesis.map((r) => r.model),
-    ["gpt-5.6-sol", "claude-opus-5", "grok-4.6"],
-  );
+  assert.deepEqual(config.ladders.analysis, [
+    { family: "gpt", tier: "luna", agents: ["pi", "opencode", "codex"] },
+    { model: "sonnet", agents: ["claude"] },
+    { family: "grok", agents: ["pi", "opencode", "grok"] },
+  ]);
+  assert.deepEqual(config.ladders.synthesis, [
+    { family: "gpt", tier: "sol", agents: ["pi", "opencode", "codex"] },
+    { model: "opus", agents: ["claude"] },
+    { family: "grok", agents: ["pi", "opencode", "grok"] },
+  ]);
 });
 
 test("a model without an agent is rejected rather than half-auto-picked", () => {
@@ -55,8 +57,26 @@ test("ladders are user-editable and validated", () => {
   const config = loadConfig(tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", agents: ["codex"] }] } }));
   assert.deepEqual(config.ladders.analysis, [{ model: "gpt-5.5", agents: ["codex"] }]);
   assert.equal(config.ladders.synthesis.length, 3, "the other role keeps its default ladder");
+  const family = loadConfig(tempRepo({ ladders: { analysis: [{ family: "gpt", tier: "luna", agents: ["codex"] }] } }));
+  assert.deepEqual(family.ladders.analysis, [{ family: "gpt", tier: "luna", agents: ["codex"] }]);
   assert.throws(() => loadConfig(tempRepo({ ladders: { analysis: [] } })), UserError);
   assert.throws(() => loadConfig(tempRepo({ ladders: { synthesis: [{ model: "x" }] } })), UserError);
+  // A rung is either a concrete id or a family+tier - never both, never neither.
+  assert.throws(
+    () =>
+      loadConfig(
+        tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", family: "gpt", tier: "luna", agents: ["codex"] }] } }),
+      ),
+    /exactly one of "model" or "family"/,
+  );
+  assert.throws(
+    () => loadConfig(tempRepo({ ladders: { analysis: [{ agents: ["codex"] }] } })),
+    /exactly one of "model" or "family"/,
+  );
+  assert.throws(
+    () => loadConfig(tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", tier: "luna", agents: ["codex"] }] } })),
+    UserError,
+  );
 });
 
 test("repo config overrides defaults, and CLI flags override both", () => {
