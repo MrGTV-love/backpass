@@ -522,13 +522,26 @@ export class AgentResolver {
       }
       trail.push({ ...candidate, ...entry });
       if (entry.verdict === "ok") {
+        let effort;
+        try {
+          effort = resolvedEffort(role, candidate.agent, this.config);
+        } catch (err) {
+          if (!(err instanceof UserError)) throw err;
+          // A harness that cannot name the role's default effort is a capability gap for
+          // that candidate, not a reason to end the run: for an auto-picked ladder, skip
+          // it with the refusal as the skip reason and let the next candidate run. A
+          // pinned harness still reports it above, because only the user can set its
+          // effort.
+          trail[trail.length - 1] = { ...candidate, ...entry, verdict: "effort-rejected", detail: err.message };
+          continue;
+        }
         this.picks[role] = {
           agent: candidate.agent,
           model: entry.resolvedModel || candidate.model,
           ladderModel: candidate.model,
           ...(candidate.family ? { family: candidate.family, tier: candidate.tier } : {}),
           ...(candidate.provider ? { provider: candidate.provider } : {}),
-          effort: resolvedEffort(role, candidate.agent, this.config),
+          effort,
           pinned: false,
           reason: describeTrail(trail),
         };
@@ -553,7 +566,8 @@ export class AgentResolver {
     }
     for (const t of losers) {
       const label = VERDICT_LABELS[t.verdict] || t.verdict;
-      const extra = t.detail && /ambiguous/i.test(t.detail) ? ` (${t.detail})` : "";
+      const extra =
+        t.detail && (/ambiguous/i.test(t.detail) || t.verdict === "effort-rejected") ? ` (${t.detail})` : "";
       info(color.dim(`    skipped ${t.agent}/${candidateLabel(t)}: ${label}${extra}`));
     }
   }

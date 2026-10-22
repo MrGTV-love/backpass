@@ -1344,6 +1344,37 @@ test("an unnamed role effort is refused, never passed through as unset", () => {
   assert.equal(resolvedEffort("synthesis", "claude", unset), "high");
 });
 
+test("the auto ladder skips a harness that cannot name the role effort instead of ending the run", async () => {
+  const config = testConfig();
+  config.ladders.analysis = [{ family: "gpt", tier: "luna", provider: "openai-codex", agents: ["omp", "codex"] }];
+  const { resolver, calls } = resolverWith(
+    {
+      "omp|family:openai-codex/gpt/luna": { resolvedModel: "openai-codex/gpt-6-luna" },
+      "codex|family:openai-codex/gpt/luna": { resolvedModel: "gpt-6-luna" },
+    },
+    { config },
+  );
+
+  const pick = await resolver.resolve("analysis");
+  assert.equal(pick.agent, "codex", "the next harness in the same rung runs");
+  assert.equal(pick.model, "gpt-6-luna");
+  assert.equal(pick.effort, "medium");
+  assert.deepEqual(calls, ["omp|family:openai-codex/gpt/luna", "codex|family:openai-codex/gpt/luna"]);
+});
+
+test("a pinned harness that cannot name the role effort still reports it to the user", async () => {
+  const config = testConfig();
+  config.analysis = { ...config.analysis, agent: "omp", model: null };
+  const { resolver } = resolverWith({}, { config });
+  await assert.rejects(
+    () => resolver.resolve("analysis"),
+    (err) =>
+      err instanceof UserError &&
+      /analysis pass has no explicit effort for omp/.test(err.message) &&
+      /--analysis-effort/.test(err.hint),
+  );
+});
+
 test("an omp probe maps a bare ladder id to the openai-codex route", async () => {
   const advertised = ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-sol", "deepseek/deepseek-v4-flash"];
   const probe = async () => ({ verdict: "ok", detail: "", availableModels: advertised });
@@ -1443,7 +1474,7 @@ test("a model rung never takes the same bare id from another provider", async ()
   );
 });
 
-test("the resolver refuses a pick whose role effort cannot be named", async () => {
+test("an exhausted ladder names the effort a skipped harness could not run", async () => {
   const config = loadConfig(tmpRepo());
   const { resolver } = resolverWith(
     {
@@ -1454,8 +1485,11 @@ test("the resolver refuses a pick whose role effort cannot be named", async () =
   );
   await assert.rejects(
     () => resolver.resolve("analysis"),
-    (err) => err instanceof UserError && /no explicit effort for omp/.test(err.message),
-    "an omp analysis rung with no configured effort is refused instead of running effort=unset",
+    (err) =>
+      err instanceof UserError &&
+      /no available agent for the analysis pass/.test(err.message) &&
+      /no explicit effort for omp/.test(err.message),
+    "the effort refusal is the skip reason, and no candidate ever runs effort=unset",
   );
   assert.equal((await resolver.resolve("synthesis")).effort, "high");
 });
