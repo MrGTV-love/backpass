@@ -788,10 +788,10 @@ wins. A rung names either a family plus tier or a bare alias; a family rung is r
 the newest model that harness advertises in that family and tier at probe time, so a new
 generation needs no release:
 
-| pass      | effort | 1st                                       | 2nd                 | 3rd                                  |
-| --------- | ------ | ----------------------------------------- | ------------------- | ------------------------------------ |
-| analysis  | medium | newest `gpt` luna via pi, opencode, codex | `sonnet` via claude | newest `grok` via pi, opencode, grok |
-| synthesis | high   | newest `gpt` sol via pi, opencode, codex  | `opus` via claude   | newest `grok` via pi, opencode, grok |
+| pass      | effort | 1st                                            | 2nd                 | 3rd                             |
+| --------- | ------ | ---------------------------------------------- | ------------------- | ------------------------------- |
+| analysis  | medium | newest `gpt` luna via omp, pi, opencode, codex | `sonnet` via claude | newest `deepseek` flash via omp |
+| synthesis | high   | newest `gpt` sol via omp, pi, opencode, codex  | `opus` via claude   | newest `deepseek` flash via omp |
 
 `omp` (Oh My Pi) is also a runner: name it in a rung. Write the model with its provider so omp gets that
 exact route, for example `openai-codex/gpt-6-luna` and not a bare `gpt-6-luna`:
@@ -885,12 +885,12 @@ CLI flags on top:
     "analysis": [
       { "family": "gpt", "tier": "luna", "agents": ["pi", "opencode", "codex"] },
       { "model": "sonnet", "agents": ["claude"] },
-      { "family": "grok", "agents": ["pi", "opencode", "grok"] }
+      { "family": "deepseek", "tier": "flash", "agents": ["omp"] }
     ],
     "synthesis": [
       { "family": "gpt", "tier": "sol", "agents": ["pi", "opencode", "codex"] },
       { "model": "opus", "agents": ["claude"] },
-      { "family": "grok", "agents": ["pi", "opencode", "grok"] }
+      { "family": "deepseek", "tier": "flash", "agents": ["omp"] }
     ]
   },
   "discovery": {
