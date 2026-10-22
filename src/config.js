@@ -8,7 +8,7 @@ import { normalizeSkillsDir } from "./skills.js";
 export const CONFIG_FILENAME = ".backpassrc.json";
 export const STATE_DIRNAME = ".backpass";
 
-export const ALL_HARNESSES = ["claude", "codex", "pi", "opencode", "grok", "cursor", "hermes"];
+export const ALL_HARNESSES = ["claude", "codex", "pi", "opencode", "grok", "cursor", "hermes", "dsh"];
 /** Cursor IDE is deferred to v1.1 and only ever runs behind --include-cursor-ide. */
 export const OPT_IN_HARNESSES = ["cursor-ide"];
 
@@ -128,6 +128,8 @@ export const DEFAULT_CONFIG = {
     opencodeStores: [],
     /** Include Oh My Pi's default session store in Pi discovery; opt-in only. */
     includeOmp: false,
+    /** Include the dsh session store; opt-in only. */
+    includeDsh: false,
     minUserTurns: 2,
     includeCursorIde: false,
   },
@@ -493,6 +495,9 @@ function validate(config, { kind = "project", repoRoot = null } = {}) {
   parseSince(config.discovery.since);
   if (typeof config.discovery.includeOmp !== "boolean") {
     throw new UserError("config.discovery.includeOmp must be a boolean");
+  }
+  if (typeof config.discovery.includeDsh !== "boolean") {
+    throw new UserError("config.discovery.includeDsh must be a boolean");
   }
   if (!Array.isArray(config.discovery.cloneRoots) || config.discovery.cloneRoots.some((p) => typeof p !== "string")) {
     throw new UserError("config.discovery.cloneRoots must be an array of paths");

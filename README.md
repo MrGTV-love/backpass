@@ -31,7 +31,7 @@ It finds the agent sessions that actually ran in your repo, reads
 what happened in them, and proposes evidence-backed edits to your memory surface - the
 memory file and project skills - under a token budget, gated by you.
 
-- **Local-first** - Reads the transcript stores of seven agent harnesses directly from disk,
+- **Local-first** - Reads the transcript stores of eight agent harnesses directly from disk,
   locally or over SSH to your own machines. No API, no upload; transcripts never leave your
   machines except into an agent you already authenticated, and obvious secrets are redacted
   before they do.
@@ -218,17 +218,18 @@ It cannot be combined with
 
 ### 1. Collect samples - which sessions belong to this repo
 
-backpass reads the local transcript stores of seven harnesses directly. No API, no upload.
+backpass reads the local transcript stores of eight harnesses directly. No API, no upload.
 
-| Harness        | Store                                           | Repo tie                                            |
-| -------------- | ----------------------------------------------- | --------------------------------------------------- |
-| **claude**     | `~/.claude/projects/<munged-cwd>/<uuid>.jsonl`  | per-line `cwd`                                      |
-| **codex**      | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`  | `cwd` + recorded `git.repository_url`               |
-| **pi**         | standalone, OMP, and BB-managed Pi JSONL stores | session-header `cwd`                                |
-| **opencode**   | `~/.local/share/opencode/opencode.db` (sqlite)  | `session.directory` / `session_v2.directory`        |
-| **grok**       | `~/.grok/sessions/<encoded-cwd>/<uuid>/`        | `summary.json` `cwd` + `git_remotes`                |
-| **cursor CLI** | `~/.cursor/chats/<md5(cwd)>/<uuid>/`            | `meta.json` `cwd`                                   |
-| **hermes**     | `~/.hermes/state.db` (sqlite)                   | session cwd, with CLI prompt / ACP config fallbacks |
+| Harness        | Store                                                           | Repo tie                                            |
+| -------------- | --------------------------------------------------------------- | --------------------------------------------------- |
+| **claude**     | `~/.claude/projects/<munged-cwd>/<uuid>.jsonl`                  | per-line `cwd`                                      |
+| **codex**      | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`                  | `cwd` + recorded `git.repository_url`               |
+| **pi**         | standalone, OMP, and BB-managed Pi JSONL stores                 | session-header `cwd`                                |
+| **opencode**   | `~/.local/share/opencode/opencode.db` (sqlite)                  | `session.directory` / `session_v2.directory`        |
+| **grok**       | `~/.grok/sessions/<encoded-cwd>/<uuid>/`                        | `summary.json` `cwd` + `git_remotes`                |
+| **cursor CLI** | `~/.cursor/chats/<md5(cwd)>/<uuid>/`                            | `meta.json` `cwd`                                   |
+| **hermes**     | `~/.hermes/state.db` (sqlite)                                   | session cwd, with CLI prompt / ACP config fallbacks |
+| **dsh**        | `~/.dsh/sessions/<encoded-cwd>/<session>/session.v4.jsonl.zstd` | session-header `cwd`                                |
 
 Claude collection covers `$CLAUDE_CONFIG_DIR/projects` alongside the default store, so a
 relocated config dir does not hide its sessions. The variable is read from backpass's own
@@ -266,6 +267,23 @@ descendants share one corroborating observer, including across synced SSH stores
 root is unreadable, the highest readable ancestor is used; without one, the file retains
 its own observer identity. Matching descendant copies link their families without merging
 distinct roots on the same host that share a native ID.
+
+dsh collection is **off by default**. Set `discovery.includeDsh` to `true` in
+`.backpassrc.json` or your [personal config](#configuration) to read
+`~/.dsh/sessions/`. Each session directory holds `session.v4.jsonl.zstd`, an
+append-only zstd stream of JSONL records; backpass reads its complete frames and uses
+the session header's `cwd` for repo association:
+
+```json
+{ "discovery": { "includeDsh": true } }
+```
+
+Then run `backpass scan --harness dsh` (or a normal `backpass` run). The `dsh` row is
+listed in the scan table with the setting off too, where it scans nothing. Only the v4
+session file is read; a session still being appended to loses only an incomplete final
+frame. The setting also applies to configured SSH hosts. For `--scope user`, set it in
+`user.discovery` and include `"dsh"` in `user.discovery.harnesses`; user scope
+otherwise collects only Claude and Codex.
 
 OpenCode collection reads both store layouts: OpenCode 1.x (`session`, `message`, `part`) and OpenCode 2.x (`session_v2`, `session_message`).
 For 2.x, session activity uses the later of the session's update time and its newest message's update time.
@@ -788,8 +806,8 @@ wins. A rung names either a family plus tier or a bare alias; a family rung is r
 the newest model that harness advertises in that family and tier at probe time, so a new
 generation needs no release:
 
-| pass      | effort | 1st                                            | 2nd                 | 3rd                             |
-| --------- | ------ | ---------------------------------------------- | ------------------- | ------------------------------- |
+| pass      | effort | 1st                              | 2nd                 | 3rd                             |
+| --------- | ------ | -------------------------------- | ------------------- | ------------------------------- |
 | analysis  | medium | newest `gpt` luna via omp, codex | `sonnet` via claude | newest `deepseek` flash via omp |
 | synthesis | high   | newest `gpt` sol via omp, codex  | `opus` via claude   | newest `deepseek` flash via omp |
 
@@ -894,11 +912,12 @@ CLI flags on top:
     ]
   },
   "discovery": {
-    "harnesses": ["claude", "codex", "pi", "opencode", "grok", "cursor", "hermes"],
+    "harnesses": ["claude", "codex", "pi", "opencode", "grok", "cursor", "hermes", "dsh"],
     "since": "30d",
     "worktreeGlobs": [],
     "cloneRoots": [],
     "includeOmp": false,
+    "includeDsh": false,
     "minUserTurns": 2
   },
   "jobs": 4

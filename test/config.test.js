@@ -30,11 +30,21 @@ test("the defaults match the approved design", () => {
   assert.equal(config.minGapEvidence, 2);
   assert.equal(config.jobs, 4);
   assert.equal(config.discovery.since, "30d");
-  assert.deepEqual(config.discovery.harnesses, ["claude", "codex", "pi", "opencode", "grok", "cursor", "hermes"]);
+  assert.deepEqual(config.discovery.harnesses, [
+    "claude",
+    "codex",
+    "pi",
+    "opencode",
+    "grok",
+    "cursor",
+    "hermes",
+    "dsh",
+  ]);
   assert.ok(!config.discovery.harnesses.includes("cursor-ide"), "Cursor IDE is deferred to v1.1");
   assert.deepEqual(config.analysis, { agent: null, model: null, effort: null }, "agents are auto-picked by default");
   assert.deepEqual(config.synthesis, { agent: null, model: null, effort: null });
   assert.equal(config.autoAgent, true);
+  assert.equal(config.discovery.includeDsh, false, "dsh collection is opt-in");
   assert.deepEqual(config.ladders.analysis, [
     { family: "gpt", tier: "luna", agents: ["omp", "codex"] },
     { model: "sonnet", agents: ["claude"] },
@@ -203,6 +213,15 @@ test("OMP discovery rejects non-boolean opt-ins rather than treating them as ena
     assert.throws(
       () => loadConfig(tempRepo({ discovery: { includeOmp } })),
       /config\.discovery\.includeOmp must be a boolean/,
+    );
+  }
+});
+
+test("dsh discovery rejects non-boolean opt-ins rather than treating them as enabled", () => {
+  for (const includeDsh of ["true", 1, null, []]) {
+    assert.throws(
+      () => loadConfig(tempRepo({ discovery: { includeDsh } })),
+      /config\.discovery\.includeDsh must be a boolean/,
     );
   }
 });
