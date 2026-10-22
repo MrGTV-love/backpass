@@ -802,30 +802,33 @@ with `--theme dark|light` or `"theme"` in `.backpassrc.json`.
 Cheap analysis, smart synthesis. Both go through acpx, so backpass uses the harnesses you
 already have - and by default it works out which ones those are. Each pass has an ordered
 ladder of candidates, and the first one that is installed, logged in, and serves its rung
-wins. A rung names either a family plus tier or a bare alias; a family rung is resolved to
-the newest model that harness advertises in that family and tier at probe time, so a new
-generation needs no release:
+wins. A rung names either a family plus tier or a bare alias, and every rung declares the
+provider it may resolve from. A family rung is resolved to the newest model that harness
+advertises in that family and tier _from that provider_ at probe time, so a new generation
+needs no release:
 
 | pass      | effort | 1st                              | 2nd                 | 3rd                             |
 | --------- | ------ | -------------------------------- | ------------------- | ------------------------------- |
 | analysis  | medium | newest `gpt` luna via omp, codex | `sonnet` via claude | newest `deepseek` flash via omp |
 | synthesis | high   | newest `gpt` sol via omp, codex  | `opus` via claude   | newest `deepseek` flash via omp |
 
-`omp` (Oh My Pi) is also a runner: name it in a rung. Write the model with its provider so omp gets that
-exact route, for example `openai-codex/gpt-6-luna` and not a bare `gpt-6-luna`:
+`omp` (Oh My Pi) is also a runner: name it in a rung, with the provider it should resolve from. A rung
+that declares `"provider": "openai-codex"` only accepts the ids the adapter advertises under that
+provider - the same generation is also listed under the API-billed `openai/` and `openrouter/`
+namespaces, and a rung never crosses over to them:
 
 ```json
 {
   "ladders": {
     "analysis": [
-      { "model": "openai-codex/gpt-6-luna", "agents": ["omp"] },
-      { "model": "deepseek/deepseek-v4-flash", "agents": ["omp"] },
-      { "model": "claude-sonnet-5-5[1m]", "agents": ["claude"] }
+      { "family": "gpt", "tier": "luna", "provider": "openai-codex", "agents": ["omp"] },
+      { "family": "deepseek", "tier": "flash", "provider": "deepseek", "agents": ["omp"] },
+      { "model": "sonnet", "provider": "anthropic", "agents": ["claude"] }
     ],
     "synthesis": [
-      { "model": "openai-codex/gpt-6.1-sol", "agents": ["omp"] },
-      { "model": "deepseek/deepseek-v4-flash", "agents": ["omp"] },
-      { "model": "claude-sonnet-5-5[1m]", "agents": ["claude"] }
+      { "family": "gpt", "tier": "sol", "provider": "openai-codex", "agents": ["omp"] },
+      { "family": "deepseek", "tier": "flash", "provider": "deepseek", "agents": ["omp"] },
+      { "model": "opus", "provider": "anthropic", "agents": ["claude"] }
     ]
   }
 }
@@ -833,9 +836,10 @@ exact route, for example `openai-codex/gpt-6-luna` and not a bare `gpt-6-luna`:
 
 Its model and reasoning level travel over acpx: `--model` at session create, and the ACP `thinking` session option
 (`off`, `auto`, `low`, `high`, `max`). A level you set that omp does not advertise, such as `medium`, is refused before any call.
-When no effort is set, omp runs at its own default thinking level and the announce line shows `effort=unset`; the
-role default `medium` for analysis is not sent to omp, while the role default `high` for synthesis is. To pin a level,
-set it: `--analysis-effort low` or `"analysis": { "effort": "low" }`.
+A role must run at an explicit effort: when neither the config nor the role default is a level the chosen harness
+applies, backpass refuses that pass with the flag that sets one instead of running with `effort=unset`. omp's
+analysis role default `medium` is one such case - pin it with `--analysis-effort low` or
+`"analysis": { "effort": "low" }`.
 
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
 because its adapter accepts sessions while logged out). Session creation may wait up to three
@@ -854,8 +858,9 @@ When a whole ladder is exhausted the error lists every candidate with what to ru
 
 Bare model ids are resolved against what each adapter advertises, and a family rung is
 resolved from that same catalog (`src/model-family.js`): the newest advertised id whose
-family and, when the rung names one, tier match. Nothing is hardcoded per harness, and a
-family rung with no advertised match is skipped and reported as model not available.
+provider, family, and - when the rung names one - tier match. Nothing is hardcoded per
+harness. A catalog with no id from the rung's declared provider is a hard, named non-match:
+the rung is skipped and the error names the provider, never a pick from another namespace.
 When the same bare id is advertised under more than one provider, backpass ranks by auth
 class - a subscription/OAuth provider over an API-key provider - from that harness's
 provider definitions and auth file (see `src/provider-auth.js`). An unrankable collision
@@ -901,14 +906,14 @@ CLI flags on top:
   "synthesis": { "agent": null, "model": null, "effort": null },
   "ladders": {
     "analysis": [
-      { "family": "gpt", "tier": "luna", "agents": ["omp", "codex"] },
-      { "model": "sonnet", "agents": ["claude"] },
-      { "family": "deepseek", "tier": "flash", "agents": ["omp"] }
+      { "family": "gpt", "tier": "luna", "provider": "openai-codex", "agents": ["omp", "codex"] },
+      { "model": "sonnet", "provider": "anthropic", "agents": ["claude"] },
+      { "family": "deepseek", "tier": "flash", "provider": "deepseek", "agents": ["omp"] }
     ],
     "synthesis": [
-      { "family": "gpt", "tier": "sol", "agents": ["omp", "codex"] },
-      { "model": "opus", "agents": ["claude"] },
-      { "family": "deepseek", "tier": "flash", "agents": ["omp"] }
+      { "family": "gpt", "tier": "sol", "provider": "openai-codex", "agents": ["omp", "codex"] },
+      { "model": "opus", "provider": "anthropic", "agents": ["claude"] },
+      { "family": "deepseek", "tier": "flash", "provider": "deepseek", "agents": ["omp"] }
     ]
   },
   "discovery": {

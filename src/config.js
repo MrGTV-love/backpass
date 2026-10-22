@@ -19,12 +19,16 @@ export const OPT_IN_HARNESSES = ["cursor-ide"];
  * authenticated, and serves the model wins.
  *
  * A rung is either a bare `model` id or a `family` plus optional `tier`
- * (`{ family: "gpt", tier: "sol" }`). A family rung carries no generation: the newest
- * matching id is resolved at probe time from what the adapter advertises
- * (`src/model-family.js`), so a newer model in that family/tier is picked up with no
- * release. Ids and per-harness spellings (`openai-codex/...`, `openai/...`, `xai/...`)
- * are resolved the same way - never hard-coded. A collision of the same bare id under
- * two providers is ranked by auth class (subscription over API key; see
+ * (`{ family: "gpt", tier: "sol" }`), and every rung declares its `provider`
+ * (`openai-codex`, `anthropic`, `deepseek`, ...). A family rung carries no generation:
+ * the newest matching id *from that provider* is resolved at probe time from what the
+ * adapter advertises (`src/model-family.js`), so a newer model in that family/tier is
+ * picked up with no release, and a generation advertised under another provider is
+ * never substituted. That is deliberate: the catalog also lists the same GPT generation
+ * under the API-billed `openai/` and `openrouter/` namespaces, and a rung that declares
+ * `openai-codex` must not be routed to them. A catalog with no id from the declared
+ * provider is a hard, named non-match. A collision of the same bare id under two
+ * providers is ranked by auth class (subscription over API key; see
  * `src/provider-auth.js`); an unrankable collision is refused, not guessed. Ladders live
  * in config so a user can reorder or shorten them in `.backpassrc.json` without a
  * release. `sonnet` and `opus` are the harness's own unversioned aliases: the harness
@@ -32,14 +36,14 @@ export const OPT_IN_HARNESSES = ["cursor-ide"];
  */
 export const DEFAULT_LADDERS = {
   analysis: [
-    { family: "gpt", tier: "luna", agents: ["omp", "codex"] },
-    { model: "sonnet", agents: ["claude"] },
-    { family: "deepseek", tier: "flash", agents: ["omp"] },
+    { family: "gpt", tier: "luna", provider: "openai-codex", agents: ["omp", "codex"] },
+    { model: "sonnet", provider: "anthropic", agents: ["claude"] },
+    { family: "deepseek", tier: "flash", provider: "deepseek", agents: ["omp"] },
   ],
   synthesis: [
-    { family: "gpt", tier: "sol", agents: ["omp", "codex"] },
-    { model: "opus", agents: ["claude"] },
-    { family: "deepseek", tier: "flash", agents: ["omp"] },
+    { family: "gpt", tier: "sol", provider: "openai-codex", agents: ["omp", "codex"] },
+    { model: "opus", provider: "anthropic", agents: ["claude"] },
+    { family: "deepseek", tier: "flash", provider: "deepseek", agents: ["omp"] },
   ],
 };
 
@@ -91,9 +95,11 @@ export const DEFAULT_CONFIG = {
   seed: null,
   /**
    * `agent: null` means auto-pick from `ladders[role]`; `effort: null` means
-   * `DEFAULT_EFFORT[role]`, except OpenCode, and omp when omp does not advertise that
-   * level (`resolvedEffort`, `src/agents.js`), which omit the overlay until effort
-   * is set. Setting `agent` pins the role and skips the ladder.
+   * `DEFAULT_EFFORT[role]` when the chosen harness can name that level. Where it cannot
+   * (OpenCode's per-model variants, an omp role default omp does not advertise) the
+   * role is refused with the flag that sets an explicit effort (`resolvedEffort`,
+   * `src/agents.js`) - a run never proceeds with an unnamed effort. Setting `agent`
+   * pins the role and skips the ladder.
    */
   analysis: { agent: null, model: null, effort: null },
   synthesis: { agent: null, model: null, effort: null },
@@ -463,9 +469,16 @@ function validate(config, { kind = "project", repoRoot = null } = {}) {
     }
     for (const rung of ladder) {
       const shape =
-        '{ "model": "<id>", "agents": ["<harness>"] } or { "family": "<name>", "tier": "<tier>", "agents": ["<harness>"] }';
+        '{ "model": "<id>", "provider": "<provider>", "agents": ["<harness>"] } or ' +
+        '{ "family": "<name>", "tier": "<tier>", "provider": "<provider>", "agents": ["<harness>"] }';
       if (!rung || typeof rung !== "object" || !Array.isArray(rung.agents) || !rung.agents.length) {
         throw new UserError(`config.ladders.${role} rungs must look like ${shape}`);
+      }
+      if (typeof rung.provider !== "string" || !rung.provider.trim()) {
+        throw new UserError(
+          `config.ladders.${role} rungs must declare "provider" (e.g. "openai-codex"): ${shape}`,
+          "a rung resolves only ids from its declared provider, so the provider is never guessed",
+        );
       }
       const hasModel = typeof rung.model === "string" && Boolean(rung.model.trim());
       const hasFamily = typeof rung.family === "string" && Boolean(rung.family.trim());

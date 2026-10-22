@@ -46,14 +46,14 @@ test("the defaults match the approved design", () => {
   assert.equal(config.autoAgent, true);
   assert.equal(config.discovery.includeDsh, false, "dsh collection is opt-in");
   assert.deepEqual(config.ladders.analysis, [
-    { family: "gpt", tier: "luna", agents: ["omp", "codex"] },
-    { model: "sonnet", agents: ["claude"] },
-    { family: "deepseek", tier: "flash", agents: ["omp"] },
+    { family: "gpt", tier: "luna", provider: "openai-codex", agents: ["omp", "codex"] },
+    { model: "sonnet", provider: "anthropic", agents: ["claude"] },
+    { family: "deepseek", tier: "flash", provider: "deepseek", agents: ["omp"] },
   ]);
   assert.deepEqual(config.ladders.synthesis, [
-    { family: "gpt", tier: "sol", agents: ["omp", "codex"] },
-    { model: "opus", agents: ["claude"] },
-    { family: "deepseek", tier: "flash", agents: ["omp"] },
+    { family: "gpt", tier: "sol", provider: "openai-codex", agents: ["omp", "codex"] },
+    { model: "opus", provider: "anthropic", agents: ["claude"] },
+    { family: "deepseek", tier: "flash", provider: "deepseek", agents: ["omp"] },
   ]);
 });
 
@@ -64,27 +64,44 @@ test("a model without an agent is rejected rather than half-auto-picked", () => 
 });
 
 test("ladders are user-editable and validated", () => {
-  const config = loadConfig(tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", agents: ["codex"] }] } }));
-  assert.deepEqual(config.ladders.analysis, [{ model: "gpt-5.5", agents: ["codex"] }]);
+  const config = loadConfig(
+    tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", provider: "openai-codex", agents: ["codex"] }] } }),
+  );
+  assert.deepEqual(config.ladders.analysis, [{ model: "gpt-5.5", provider: "openai-codex", agents: ["codex"] }]);
   assert.equal(config.ladders.synthesis.length, 3, "the other role keeps its default ladder");
-  const family = loadConfig(tempRepo({ ladders: { analysis: [{ family: "gpt", tier: "luna", agents: ["codex"] }] } }));
-  assert.deepEqual(family.ladders.analysis, [{ family: "gpt", tier: "luna", agents: ["codex"] }]);
+  const family = loadConfig(
+    tempRepo({
+      ladders: { analysis: [{ family: "gpt", tier: "luna", provider: "openai-codex", agents: ["codex"] }] },
+    }),
+  );
+  assert.deepEqual(family.ladders.analysis, [
+    { family: "gpt", tier: "luna", provider: "openai-codex", agents: ["codex"] },
+  ]);
   assert.throws(() => loadConfig(tempRepo({ ladders: { analysis: [] } })), UserError);
   assert.throws(() => loadConfig(tempRepo({ ladders: { synthesis: [{ model: "x" }] } })), UserError);
   // A rung is either a concrete id or a family+tier - never both, never neither.
   assert.throws(
     () =>
       loadConfig(
-        tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", family: "gpt", tier: "luna", agents: ["codex"] }] } }),
+        tempRepo({
+          ladders: {
+            analysis: [{ model: "gpt-5.5", family: "gpt", tier: "luna", provider: "openai-codex", agents: ["codex"] }],
+          },
+        }),
       ),
     /exactly one of "model" or "family"/,
   );
   assert.throws(
-    () => loadConfig(tempRepo({ ladders: { analysis: [{ agents: ["codex"] }] } })),
+    () => loadConfig(tempRepo({ ladders: { analysis: [{ provider: "openai-codex", agents: ["codex"] }] } })),
     /exactly one of "model" or "family"/,
   );
   assert.throws(
-    () => loadConfig(tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", tier: "luna", agents: ["codex"] }] } })),
+    () =>
+      loadConfig(
+        tempRepo({
+          ladders: { analysis: [{ model: "gpt-5.5", tier: "luna", provider: "openai-codex", agents: ["codex"] }] },
+        }),
+      ),
     UserError,
   );
 });
@@ -402,4 +419,22 @@ test("user-scope defaults honor relocated Claude and Codex homes", () => {
       else process.env[key] = value;
     }
   }
+});
+
+test("a ladder rung must declare the provider it resolves ids from", () => {
+  assert.throws(
+    () => loadConfig(tempRepo({ ladders: { analysis: [{ family: "gpt", tier: "luna", agents: ["openai-codex"] }] } })),
+    (err) => err instanceof UserError && /must declare "provider"/.test(err.message),
+    "a family rung without a provider would pick across every advertised provider",
+  );
+  assert.throws(
+    () => loadConfig(tempRepo({ ladders: { analysis: [{ model: "gpt-5.5", agents: ["codex"] }] } })),
+    /must declare "provider"/,
+  );
+  const ok = loadConfig(
+    tempRepo({
+      ladders: { analysis: [{ family: "gpt", tier: "luna", provider: "openai-codex", agents: ["codex"] }] },
+    }),
+  );
+  assert.equal(ok.ladders.analysis[0].provider, "openai-codex");
 });

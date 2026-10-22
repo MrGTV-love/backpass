@@ -63,24 +63,57 @@ function compareVersions(a, b) {
   return 0;
 }
 
+/** The provider a catalog id names, or `""` when the id is bare. */
+export function providerOf(id) {
+  const text = String(id ?? "").trim();
+  const slash = text.indexOf("/");
+  return slash === -1 ? "" : text.slice(0, slash).toLowerCase();
+}
+
 /**
- * The newest advertised id in `family` (and `tier`, when named).
+ * True when an advertised id may serve a rung that declares `provider`.
  *
- * Returns `null` when the catalog has nothing that fits - a missing family is a
- * model-unavailable verdict, never a guess or a fallback to a sibling tier. Ties on
+ * A bare id carries no provider claim - it is the adapter's own namespace (`codex`
+ * advertises `gpt-6.1-sol`, not `openai-codex/gpt-6.1-sol`) - so it is accepted. A
+ * prefixed id must name the rung's provider exactly. That equality is what keeps GPT
+ * work on the subscription route when a rung declares `openai-codex`: the catalog also
+ * lists the same generation under the API-billed `openai` and `openrouter` namespaces,
+ * and picking across them is exactly the money bug this rule deletes.
+ */
+export function matchesProvider(id, provider) {
+  const want = String(provider ?? "")
+    .trim()
+    .toLowerCase();
+  if (!want) return true;
+  const actual = providerOf(id);
+  return actual === "" || actual === want;
+}
+
+/**
+ * The newest advertised id in `family` (and `tier`, when named) served by `provider`.
+ *
+ * Returns `null` when the catalog has nothing that fits - a missing family or provider is
+ * a model-unavailable verdict, never a guess, a fallback to a sibling tier, or a pick
+ * from another provider's namespace. A rung that declares no provider resolves nothing:
+ * "highest version across every advertised id" is the behaviour this deletes. Ties on
  * version prefer the un-tiered id, so a `-fast` variant never wins over the base model
  * for a rung that named no tier.
  *
  * @param {string[]} advertised model ids as the harness spells them
  * @param {string} family
  * @param {string} [tier]
+ * @param {string} [provider] the rung's declared provider, e.g. `openai-codex`
  * @returns {string | null}
  */
-export function newestInFamily(advertised, family, tier) {
+export function newestInFamily(advertised, family, tier, provider = "") {
   const wantFamily = String(family ?? "")
     .trim()
     .toLowerCase();
   if (!wantFamily) return null;
+  const wantProvider = String(provider ?? "")
+    .trim()
+    .toLowerCase();
+  if (!wantProvider) return null;
   const wantTier = String(tier ?? "")
     .trim()
     .toLowerCase();
@@ -88,6 +121,7 @@ export function newestInFamily(advertised, family, tier) {
   let bestVersion = null;
   let bestExactTier = false;
   for (const id of advertised || []) {
+    if (!matchesProvider(id, wantProvider)) continue;
     const parsed = parseModelId(id);
     if (!parsed || parsed.family !== wantFamily) continue;
     if (wantTier && parsed.tier !== wantTier) continue;

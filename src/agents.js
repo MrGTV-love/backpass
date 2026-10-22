@@ -1,6 +1,6 @@
 import { UserError, color, info, warn } from "./logger.js";
 import { DEFAULT_EFFORT, LEGACY_DEFAULT_AGENTS } from "./config.js";
-import { newestInFamily } from "./model-family.js";
+import { matchesProvider, newestInFamily } from "./model-family.js";
 import { AcpxError, SESSION_CREATE_TIMEOUT_MS, acpxVersion, classifyAcpxFailure, probeSession } from "./acpx.js";
 import { ambiguousModelDetail, providerAuthState, rankCollidingIds, readProviderAuthTypes } from "./provider-auth.js";
 import { OMP_THINKING_LEVELS } from "./harness-invoke.js";
@@ -16,12 +16,14 @@ import { runCapture } from "./subprocess.js";
  * real call is the decider, and a classifiable failure there (AUTH_REQUIRED, model
  * rejected, adapter missing) demotes the candidate and falls through to the next one.
  *
- * Bare ladder ids are matched against the advertised list (`resolveModelId`). A family
- * rung (`{ family, tier }`) carries no id at all: its newest matching generation is
- * picked from that same advertised list at probe time (`newestInFamily`), so a newer
- * model in the family is used without a release. A unique `provider/id` wins; a
- * collision is ranked by auth class (subscription over API key) from
- * `src/provider-auth.js`. An unrankable collision is a loud non-match that names
+ * Every rung declares its `provider`. Bare ladder ids are matched against the advertised
+ * list (`resolveModelId`) and the match must belong to that provider. A family rung
+ * (`{ family, tier, provider }`) carries no id at all: its newest matching generation is
+ * picked from that same advertised list at probe time (`newestInFamily`), filtered to the
+ * declared provider, so a newer model in the family is used without a release and a
+ * generation advertised under another provider is never substituted. A unique
+ * `provider/id` wins; a collision is ranked by auth class (subscription over API key)
+ * from `src/provider-auth.js`. An unrankable collision is a loud non-match that names
  * the ids - never an arbitrary pick, and never silent fallthrough disguised as
  * "model not available".
  *
@@ -169,20 +171,29 @@ function resolveAdvertisedModel(bareId, advertised, agent, options = {}) {
 }
 
 /**
+ * Enforce a rung's declared provider on a resolved advertised id. An id the catalog
+ * advertises under another provider is not this rung's model, however well its bare
+ * name matched: the resolution is refused, never passed to the adapter.
+ */
+function constrainProvider(resolved, candidate) {
+  if (!resolved.id || matchesProvider(resolved.id, candidate.provider)) return resolved;
+  return { id: null, wrongProvider: resolved.id };
+}
+
+/**
  * Resolve one rung against a catalog. A family rung picks the newest advertised id in
  * its family/tier; a model rung goes through the bare-id matcher (and its auth-class
  * tie-break). `ambiguous` is only ever produced by the model path.
  */
 function resolveCandidateModel(candidate, advertised, agent, options = {}) {
   if (candidate.family) {
-    const id = newestInFamily(advertised, candidate.family, candidate.tier);
-    return { id };
+    return { id: newestInFamily(advertised, candidate.family, candidate.tier, candidate.provider) };
   }
-  return resolveAdvertisedModel(candidate.model, advertised, agent, options);
+  return constrainProvider(resolveAdvertisedModel(candidate.model, advertised, agent, options), candidate);
 }
 
 /**
- * @param {{ model?: string, family?: string, tier?: string }} candidate
+ * @param {{ model?: string, family?: string, tier?: string, provider?: string, wrongProvider?: string }} candidate
  * @param {string[]} advertised
  * @param {{ source?: string }} [options]
  */
@@ -192,7 +203,11 @@ function absentDetail(candidate, advertised, { source } = {}) {
   }
   if (candidate.family) {
     const rung = candidateLabel(candidate);
-    return `no advertised model matches ${rung} among ${advertised.length} advertised model(s)`;
+    const provider = candidate.provider ? ` under provider ${candidate.provider}` : " (the rung declares no provider)";
+    return `no advertised model matches ${rung}${provider} among ${advertised.length} advertised model(s)`;
+  }
+  if (candidate.wrongProvider) {
+    return `the catalog resolves ${candidate.model} to ${candidate.wrongProvider}, not the rung's provider ${candidate.provider}`;
   }
   return source
     ? `absent from ${source} (provider not logged in?)`
@@ -201,7 +216,7 @@ function absentDetail(candidate, advertised, { source } = {}) {
 
 /**
  * How a rung is described when its model id is not known yet (`gpt/sol`).
- * @param {{ model?: string, family?: string, tier?: string }} candidate
+ * @param {{ model?: string, family?: string, tier?: string, provider?: string }} candidate
  */
 export function candidateLabel({ model, family, tier }) {
   if (family) return tier ? `${family}/${tier}` : family;
@@ -211,13 +226,26 @@ export function candidateLabel({ model, family, tier }) {
 /** Flatten a ladder model-outer / harness-inner into `{ model, family, tier, agent }`. */
 export function flattenLadder(ladder) {
   return ladder.flatMap((rung) =>
-    rung.agents.map((agent) => ({ model: rung.model, family: rung.family, tier: rung.tier, agent })),
+    rung.agents.map((agent) => ({
+      model: rung.model,
+      family: rung.family,
+      tier: rung.tier,
+      provider: rung.provider,
+      agent,
+    })),
   );
 }
 
-export function candidateKey({ agent, model, family, tier }) {
-  if (family) return `${agent}|family:${family}/${tier ?? ""}`;
-  return `${agent}|${model}`;
+/**
+ * Cache/memo identity for a candidate. The provider is part of it: two rungs may name
+ * the same family/tier (or the same bare id) under different providers, and reusing one
+ * provider's resolved id for the other is exactly the cross-provider substitution the
+ * declared provider exists to prevent.
+ */
+export function candidateKey({ agent, model, family, tier, provider }) {
+  const scope = provider ? `${provider}/` : "";
+  if (family) return `${agent}|family:${scope}${family}/${tier ?? ""}`;
+  return `${agent}|${scope}${model}`;
 }
 
 /**
@@ -263,19 +291,14 @@ export async function probeCandidate(candidate, options = {}) {
   }
 
   const advertised = result.availableModels || [];
-  if (candidate.family) {
-    const id = newestInFamily(advertised, candidate.family, candidate.tier);
-    if (!id) {
-      return { verdict: "model-unavailable", detail: absentDetail(candidate, advertised), resolvedModel: null };
-    }
-    return { verdict: "ok", detail: "", resolvedModel: id };
-  }
-  if (TRUSTING_MODEL_AGENTS.has(agent)) {
+  if (!candidate.family && TRUSTING_MODEL_AGENTS.has(agent)) {
     return { verdict: "ok", detail: "model accepted on faith; the first real call verifies it", resolvedModel: model };
   }
-  const resolved = resolveAdvertisedModel(model, advertised, agent, options);
+  const resolved = resolveCandidateModel(candidate, advertised, agent, options);
   if (!resolved.id) {
-    const detail = resolved.ambiguous ? ambiguousModelDetail(resolved.ambiguous) : absentDetail(candidate, advertised);
+    const detail = resolved.ambiguous
+      ? ambiguousModelDetail(resolved.ambiguous)
+      : absentDetail({ ...candidate, ...resolved }, advertised);
     return { verdict: "model-unavailable", detail, resolvedModel: null };
   }
   const tieBreak = resolved.tieBreak;
@@ -444,7 +467,7 @@ export class AgentResolver {
     return entry;
   }
 
-  /** The candidates for a role, in order, as `{ agent, model }`. */
+  /** The candidates for a role, in order, as `{ agent, model, family, tier, provider }`. */
   ladder(role) {
     return flattenLadder(this.config.ladders[role]);
   }
@@ -463,7 +486,7 @@ export class AgentResolver {
   /**
    * @param {"analysis" | "synthesis"} role
    * @returns {Promise<{ agent: string, model: string | null, ladderModel?: string, family?: string,
-   *   tier?: string, effort: string | null, pinned: boolean, reason: string }>}
+   *   tier?: string, provider?: string, effort: string, pinned: boolean, reason: string }>}
    */
   async resolve(role) {
     if (this.picks[role]) return this.picks[role];
@@ -503,6 +526,7 @@ export class AgentResolver {
           model: entry.resolvedModel || candidate.model,
           ladderModel: candidate.model,
           ...(candidate.family ? { family: candidate.family, tier: candidate.tier } : {}),
+          ...(candidate.provider ? { provider: candidate.provider } : {}),
           effort: resolvedEffort(role, candidate.agent, this.config),
           pinned: false,
           reason: describeTrail(trail),
@@ -545,6 +569,7 @@ export class AgentResolver {
       model: pick.ladderModel,
       family: pick.family,
       tier: pick.tier,
+      provider: pick.provider,
     });
     if (this.memo.get(key)?.verdict === "ok") {
       // First worker to see the failure records it; the rest just re-resolve.
@@ -591,18 +616,46 @@ export class AgentResolver {
 }
 
 /**
- * OpenCode variants are per-model, so role defaults do not become an overlay. A role default
- * that omp does not advertise (analysis `medium`) is not forced on omp; a default it does
- * advertise (synthesis `high`) applies. A level the user sets is kept and checked by
- * `src/harness-invoke.js`, never dropped here.
+ * The reasoning effort a role runs at, with no unset outcome.
+ *
+ * A configured level always wins and is checked by `src/harness-invoke.js`, never dropped
+ * here. Otherwise the role default applies - except where it cannot be named for that
+ * harness: OpenCode variants are per-model, so no role default is safe there, and an omp
+ * role default omp does not advertise (analysis `medium`) is not a level omp applies.
+ * Those cases are refused with the role, the harness, and the flag that sets it; a run
+ * never proceeds with `effort=unset` as if a level had been resolved.
+ *
+ * @param {"analysis" | "synthesis"} role
+ * @param {string} agent
+ * @param {object} config
+ * @returns {string}
  */
 export function resolvedEffort(role, agent, config) {
   const configured = config[role].effort;
   if (typeof configured === "string" && configured.trim()) return configured.trim();
-  if (agent === "opencode") return null;
   const fallback = DEFAULT_EFFORT[role];
-  if (agent === "omp" && !OMP_THINKING_LEVELS.includes(fallback)) return null;
+  if (agent === "opencode") {
+    return refuseUnnamedEffort(
+      role,
+      agent,
+      "OpenCode selects a variant per model, so no role default is safe",
+      `set --${role}-effort <level>, or "${role}": { "effort": "<level>" } in .backpassrc.json`,
+    );
+  }
+  if (agent === "omp" && !OMP_THINKING_LEVELS.includes(fallback)) {
+    return refuseUnnamedEffort(
+      role,
+      agent,
+      `the role default "${fallback}" is not one of omp's thinking levels (${OMP_THINKING_LEVELS.join(", ")})`,
+      `set --${role}-effort <level> (omp levels: ${OMP_THINKING_LEVELS.join(", ")}), or "${role}": { "effort": "<level>" } in .backpassrc.json`,
+    );
+  }
   return fallback;
+}
+
+/** @returns {never} */
+function refuseUnnamedEffort(role, agent, why, hint) {
+  throw new UserError(`the ${role} pass has no explicit effort for ${agent}: ${why}`, hint);
 }
 
 function describeTrail(trail) {
