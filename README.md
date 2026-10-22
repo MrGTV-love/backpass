@@ -790,8 +790,8 @@ generation needs no release:
 
 | pass      | effort | 1st                                            | 2nd                 | 3rd                             |
 | --------- | ------ | ---------------------------------------------- | ------------------- | ------------------------------- |
-| analysis  | medium | newest `gpt` luna via omp, pi, opencode, codex | `sonnet` via claude | newest `deepseek` flash via omp |
-| synthesis | high   | newest `gpt` sol via omp, pi, opencode, codex  | `opus` via claude   | newest `deepseek` flash via omp |
+| analysis  | medium | newest `gpt` luna via omp, codex | `sonnet` via claude | newest `deepseek` flash via omp |
+| synthesis | high   | newest `gpt` sol via omp, codex  | `opus` via claude   | newest `deepseek` flash via omp |
 
 `omp` (Oh My Pi) is also a runner: name it in a rung. Write the model with its provider so omp gets that
 exact route, for example `openai-codex/gpt-6-luna` and not a bare `gpt-6-luna`:
@@ -883,12 +883,12 @@ CLI flags on top:
   "synthesis": { "agent": null, "model": null, "effort": null },
   "ladders": {
     "analysis": [
-      { "family": "gpt", "tier": "luna", "agents": ["pi", "opencode", "codex"] },
+      { "family": "gpt", "tier": "luna", "agents": ["omp", "codex"] },
       { "model": "sonnet", "agents": ["claude"] },
       { "family": "deepseek", "tier": "flash", "agents": ["omp"] }
     ],
     "synthesis": [
-      { "family": "gpt", "tier": "sol", "agents": ["pi", "opencode", "codex"] },
+      { "family": "gpt", "tier": "sol", "agents": ["omp", "codex"] },
       { "model": "opus", "agents": ["claude"] },
       { "family": "deepseek", "tier": "flash", "agents": ["omp"] }
     ]

@@ -109,8 +109,8 @@ MODELS (two-tier: cheap analysis, smart synthesis - all through acpx)
   logged in, and serves the rung (a cached zero-token probe; cold starts may take 3m).
   A family rung names no generation: the newest model that harness advertises in that
   family/tier is used, so a newer model needs no release.
-    analysis   newest gpt luna via omp, pi, opencode, codex  >  sonnet via claude  >  newest deepseek flash via omp
-    synthesis  newest gpt sol  via omp, pi, opencode, codex  >  opus via claude    >  newest deepseek flash via omp
+    analysis   newest gpt luna via omp, codex  >  sonnet via claude  >  newest deepseek flash via omp
+    synthesis  newest gpt sol  via omp, codex  >  opus via claude    >  newest deepseek flash via omp
   Setting an agent pins that pass and skips its ladder.
   --analysis-agent <a>     acpx agent for the per-transcript pass       [auto]
   --analysis-model <id>    model id for the analysis pass (needs --analysis-agent)

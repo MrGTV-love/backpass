@@ -131,10 +131,10 @@ function emptyOutput(agent, model, stderr = "") {
 test("the ladders flatten model-outer, harness-inner, in the captain's order", () => {
   assert.deepEqual(
     flattenLadder(DEFAULT_LADDERS.analysis).map((c) => `${candidateLabel(c)}@${c.agent}`),
-    ["gpt/luna@pi", "gpt/luna@opencode", "gpt/luna@codex", "sonnet@claude", "grok@pi", "grok@opencode", "grok@grok"],
+    ["gpt/luna@omp", "gpt/luna@codex", "sonnet@claude", "deepseek/flash@omp"],
   );
   assert.equal(candidateLabel(flattenLadder(DEFAULT_LADDERS.synthesis)[0]), "gpt/sol");
-  assert.equal(candidateLabel(flattenLadder(DEFAULT_LADDERS.synthesis)[3]), "opus");
+  assert.equal(candidateLabel(flattenLadder(DEFAULT_LADDERS.synthesis)[2]), "opus");
 });
 
 test("a family rung takes the newest generation the harness advertises, at probe time", async () => {
