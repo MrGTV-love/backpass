@@ -541,7 +541,9 @@ Not every annotate turn is an answer, and the three cases are kept apart because
 for different things:
 
 - **the agent edited the copy again** - the ids it was given no longer describe the files.
-  It is shown the fresh measurement and answers again; this costs no re-prompt.
+  It is shown the fresh measurement and answers again; this costs no re-prompt. Editing is
+  how a model reverts a change it decides cannot ship, so it is never itself a failure: a
+  run is bounded by its total annotate turns, not by how many times the files moved.
 - **the turn came back empty** - the harness returned success with no text at all. Nothing
   was said, so there is nothing to correct: the annotation is retried once in a **new**
   session, since the accumulated context of the old one is the likeliest cause.
