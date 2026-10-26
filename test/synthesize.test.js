@@ -34,6 +34,10 @@ if (argv.includes("sessions")) {
 if (argv.includes("set")) process.exit(0);
 const fileAt = argv.indexOf("--file");
 if (fileAt < 0) process.exit(2);
+if (process.env.FAKE_ACPX_TIMEOUT) {
+  process.stderr.write("[acpx] error: TIMEOUT Timed out after 900000ms\\n");
+  process.exit(3);
+}
 // A held turn keeps working until the test releases it, however much fake time passed.
 const hold = process.env.FAKE_ACPX_HOLD;
 while (hold && !fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
@@ -85,6 +89,7 @@ const { State } = await import("../src/state.js");
 const { UserError, setLoggerSink } = await import("../src/logger.js");
 const { workspacePathFor } = await import("../src/workspace.js");
 const { makeRepo } = await import("./helpers/staging.js");
+const { reportError } = await import("../src/cli.js");
 
 setLoggerSink(() => {});
 
@@ -568,6 +573,23 @@ test("an explicit per-transcript timeoutSeconds never caps a synthesis turn that
   const turns = calls().filter((c) => c.argv.includes("--file"));
   assert.equal(turns.length, 2);
   for (const turn of turns) assert.ok(!turn.argv.includes("--timeout"), turn.argv.join(" "));
+});
+
+test("acpx's own timeout on a synthesis turn never advises timeoutSeconds, which synthesis ignores", async (t) => {
+  const { run } = setup({ edit: {}, annotations: [{ reply: { edits: [] } }] }, { overrides: { timeoutSeconds: 300 } });
+  process.env.FAKE_ACPX_TIMEOUT = "1";
+  t.after(() => delete process.env.FAKE_ACPX_TIMEOUT);
+  const err = await run().then(
+    () => assert.fail("a timed-out synthesis resolved"),
+    (error) => error,
+  );
+  assert.equal(err.timedOut, true);
+  const lines = [];
+  t.mock.method(console, "error", (...args) => lines.push(args.join(" ")));
+  assert.equal(reportError(err), 1);
+  const output = lines.join("\n");
+  assert.match(output, /acpx ended the call at its own timeout/);
+  assert.doesNotMatch(output, /raise timeoutSeconds/);
 });
 
 function oversizedParagraph(count = 5) {

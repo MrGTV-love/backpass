@@ -77,7 +77,8 @@ export class AcpxError extends Error {
     /** Set when the call exited clean but produced no usable text - see `assertNonEmptyOutput`. */
     this.emptyOutput = emptyOutput;
     /** "verify" when the adapter-configuration check timed out, before any prompt ran;
-     * "stall" when the explicit `stallTimeoutSeconds` cap stopped a silent turn. */
+     * "stall" when the explicit `stallTimeoutSeconds` cap stopped a silent turn;
+     * "acpx" when acpx's own timeout ended a call backpass did not cap. */
     this.stage = stage;
   }
 }
@@ -624,7 +625,7 @@ export async function execOneShot({
     if (endedAtTimeout(result)) {
       throw new AcpxError(
         timeoutMessage(result, agent, "exec", `acpx ${agent} exec timed out after ${timeoutSeconds}s`),
-        { ...result, timedOut: true },
+        { ...result, timedOut: true, stage: timeoutSeconds > 0 ? null : "acpx" },
       );
     }
     if (result.code !== 0) {
@@ -794,7 +795,7 @@ export async function openSession({
         if (invocation.sessionModeRequired) {
           throw new AcpxError(
             `acpx ${agent} could not enable write session mode=${invocation.sessionMode}: ${detail}`,
-            { ...setMode, timedOut },
+            { ...setMode, timedOut, stage: timedOut ? "acpx" : null },
           );
         }
         notes.push(
@@ -816,6 +817,7 @@ export async function openSession({
         throw new AcpxError(`acpx ${agent} could not apply invocation-scoped effort=${effort}: ${detail}`, {
           ...set,
           timedOut,
+          stage: timedOut ? "acpx" : null,
         });
       }
     }
@@ -875,7 +877,7 @@ export async function openSession({
           "session prompt",
           `acpx ${agent} session prompt timed out after ${timeoutSeconds}s`,
         ),
-        { ...result, timedOut: true },
+        { ...result, timedOut: true, stage: timeoutSeconds > 0 ? null : "acpx" },
       );
     }
     if (result.code !== 0) {

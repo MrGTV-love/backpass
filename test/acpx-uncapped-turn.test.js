@@ -28,8 +28,24 @@ if (argv.includes("config") && argv.includes("show")) {
   process.stdout.write(JSON.stringify({ agents: {} }));
   process.exit(0);
 }
+const mode = process.env.FAKE_MODE;
+const acpxTimeout = () => {
+  process.stderr.write("[acpx] error: TIMEOUT Timed out after 900000ms\\n");
+  process.exit(3);
+};
+if (argv.includes("set") && mode === "set-timeout") acpxTimeout();
 if (argv.includes("set")) hold("set");
 if (!argv.includes("--file")) process.exit(0);
+if (mode === "prompt-timeout") acpxTimeout();
+if (mode === "tool-error") {
+  // acpx's JSON stream carries both directions: a client error reply to one tool
+  // request (non-null id), then acpx's own terminal onError object (id null).
+  const toolError = { jsonrpc: "2.0", id: 7, error: { code: -32002, message: "Resource not found: missing.md" } };
+  const data = { acpxCode: "RUNTIME", detailCode: "AUTH_REQUIRED", details: "Sign in before sending a prompt" };
+  const terminal = { jsonrpc: "2.0", id: null, error: { code: -32603, message: "Request failed", data } };
+  process.stdout.write(JSON.stringify(toolError) + "\\n" + JSON.stringify(terminal) + "\\n");
+  process.exit(1);
+}
 hold("prompt");
 const update = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } };
 process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update } }) + "\\n");
@@ -38,7 +54,7 @@ process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { usage: { 
 );
 fs.chmodSync(fakeAcpx, 0o755);
 process.env.BACKPASS_ACPX_BIN = fakeAcpx;
-const { execOneShot, sessionPrompt } = await import("../src/acpx.js");
+const { classifyAcpxFailure, execOneShot, sessionPrompt } = await import("../src/acpx.js");
 const { reportError } = await import("../src/cli.js");
 
 test.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
@@ -135,4 +151,66 @@ test("an explicit stall cap stops a silent turn and the error names stallTimeout
   assert.match(output, /no ACP activity/);
   assert.match(output, /stallTimeoutSeconds/);
   assert.doesNotMatch(output, /raise timeoutSeconds/);
+});
+
+function hint(t, err) {
+  const lines = [];
+  t.mock.method(console, "error", (...args) => lines.push(args.join(" ")));
+  assert.equal(reportError(err), 1);
+  return lines.join("\n");
+}
+
+function withMode(t, mode) {
+  process.env.FAKE_MODE = mode;
+  t.after(() => delete process.env.FAKE_MODE);
+  return reset(t);
+}
+
+test("a tool request's error reply is not the call's diagnostic; acpx's terminal error is", async (t) => {
+  const promptFile = withMode(t, "tool-error");
+  const err = await execOneShot({ agent: "codex", promptFile, cwd: fixtureDir }).then(
+    () => assert.fail("a failed exec resolved"),
+    (error) => error,
+  );
+  assert.match(
+    err.message,
+    /exec failed \(exit 1\): \[acpx\] error: RUNTIME AUTH_REQUIRED Sign in before sending a prompt$/,
+  );
+  assert.doesNotMatch(err.stderr, /Resource not found/);
+  assert.equal(classifyAcpxFailure(err), "unauthenticated");
+});
+
+test("acpx's own timeout on an uncapped turn or setup step never advises timeoutSeconds", async (t) => {
+  for (const [mode, call] of [
+    [
+      "prompt-timeout",
+      (promptFile) => sessionPrompt({ agent: "codex", sessionName: "bp-acpx-timeout", promptFile, cwd: fixtureDir }),
+    ],
+    ["prompt-timeout", (promptFile) => execOneShot({ agent: "codex", promptFile, cwd: fixtureDir })],
+    [
+      "set-timeout",
+      (promptFile) =>
+        sessionPrompt({ agent: "codex", effort: "medium", sessionName: "bp-set-timeout", promptFile, cwd: fixtureDir }),
+    ],
+  ]) {
+    await t.test(mode, async (st) => {
+      const err = await call(withMode(st, mode)).then(
+        () => assert.fail("a timed-out call resolved"),
+        (error) => error,
+      );
+      assert.equal(err.timedOut, true);
+      const output = hint(st, err);
+      assert.match(output, /acpx ended the call at its own timeout/);
+      assert.doesNotMatch(output, /raise timeoutSeconds/);
+    });
+  }
+});
+
+test("acpx's timeout under an explicit timeoutSeconds still advises raising it", async (t) => {
+  const promptFile = withMode(t, "prompt-timeout");
+  const err = await execOneShot({ agent: "codex", promptFile, cwd: fixtureDir, timeoutSeconds: 300 }).then(
+    () => assert.fail("a timed-out call resolved"),
+    (error) => error,
+  );
+  assert.match(hint(t, err), /raise timeoutSeconds/);
 });

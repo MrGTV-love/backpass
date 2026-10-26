@@ -82,10 +82,13 @@ export async function captureModelActivity(
     ) {
       text += update.content.text;
     }
-    if (message.error) {
-      // Match acpx's quiet diagnostic contract: JSON errors retain adapter details
-      // and detailCode in data (output-lylSoEBd.js:72-107,925-929,994-996).
-      // These carry AUTH_REQUIRED/model rejection even when message is generic.
+    if (message.error && message.id === null) {
+      // Match acpx's quiet diagnostic contract: only acpx's terminal onError object
+      // (buildJsonRpcErrorResponse, id null; output-lylSoEBd.js:109-115,287-297) is a
+      // diagnostic. The stream also carries error replies to individual tool requests
+      // (non-null ids), which quiet output never prints. The terminal object keeps
+      // adapter details and detailCode in data (output-lylSoEBd.js:72-107,925-929),
+      // carrying AUTH_REQUIRED/model rejection even when message is generic.
       const data = message.error.data;
       const qualifier = [data?.acpxCode, data?.detailCode].filter((value) => typeof value === "string").join(" ");
       const detail =
