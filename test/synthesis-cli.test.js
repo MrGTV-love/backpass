@@ -206,6 +206,29 @@ for (const { how, attributes } of [
   });
 }
 
+test("a fast-forward with an expired synthesis-start reflog refuses with a clear reason", () => {
+  const dir = makeCliRepo({ memory: MEMORY });
+  const updated = `${MEMORY}\n- Updated by the upstream commit.\n`;
+  const { clone } = upstreamCommit(dir, { "AGENTS.md": updated });
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: EDIT_TURN,
+      repoGit: [
+        ["fetch", "-q", clone, "main"],
+        ["merge", "--ff-only", "FETCH_HEAD"],
+        ["reflog", "expire", "--expire=all", "--all"],
+      ].map((args) => ({ cwd: dir, args })),
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("AGENTS.md changed in the repository during synthesis"), run.output);
+  assert.ok(run.output.includes("the synthesis-start HEAD entry cannot be found in the reflog"), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+  assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), updated);
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "AGENTS.md"]), "");
+});
+
 for (const scenario of [
   {
     name: "an unrelated src/ commit",
@@ -220,6 +243,13 @@ for (const scenario of [
     after: [
       ["checkout", "-q", "-b", "tmp"],
       ["checkout", "-q", "main"],
+    ],
+  },
+  {
+    name: "150 unrelated same-content checkouts",
+    after: [
+      ["branch", "tmp"],
+      ...Array.from({ length: 150 }, (_, i) => ["checkout", "-q", i % 2 === 0 ? "tmp" : "main"]),
     ],
   },
   {

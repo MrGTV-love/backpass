@@ -245,7 +245,9 @@ function repoGitState(repo, files) {
   }
 }
 
-const REFLOG_LIMIT = 100;
+const REFLOG_PAGE_SIZE = 100;
+const REFLOG_UNAVAILABLE =
+  "the synthesis-start HEAD entry cannot be found in the reflog; expired or rewritten history cannot establish which moves changed the fingerprinted files";
 
 /**
  * Every HEAD move since the snapshot (counted from the reflog length recorded then, so a
@@ -255,33 +257,63 @@ const REFLOG_LIMIT = 100;
  * checkout, reset, or rebase looks the same as anyone else's. Reflogs describe operations, not actors: a harness
  * can itself fast-forward (or forge a reflog). This is accidental write-through detection,
  * not a sandbox against hostile tools. Returns the fingerprinted paths fast-forwards changed,
- * or null when the moves cannot be accounted for.
+ * a reason when the synthesis-start boundary is unavailable, or null for other unsafe moves.
  */
 function fastForwardFiles(git, paths) {
-  if (!paths.length) return new Set();
+  if (!paths.length) return { files: new Set() };
   try {
     const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
     const moves = Number(synthesisGit(git.root, ["rev-list", "--walk-reflogs", "--count", "HEAD"]).trim()) - git.moves;
-    if (!(moves >= 0 && moves <= REFLOG_LIMIT)) return null;
-    const entries = synthesisGit(git.root, ["reflog", "show", "-n", String(moves + 1), "--format=%H%x00%gs", "HEAD"])
-      .trimEnd()
-      .split("\n")
-      .map((entry) => entry.split("\0"));
-    if (entries[0]?.[0] !== head || entries[moves]?.[0] !== git.head) return null;
+    if (!(moves >= 0)) return { reason: REFLOG_UNAVAILABLE };
     const files = new Set();
-    for (let i = 0; i < moves; i += 1) {
-      const [to, subject] = entries[i];
-      const from = entries[i + 1][0];
-      if (from === to) continue;
-      const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...paths])
-        .split("\0")
-        .filter(Boolean);
-      if (!touched.length) continue;
-      if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) return null;
-      synthesisGit(git.root, ["merge-base", "--is-ancestor", from, to]);
-      for (const file of touched) files.add(file);
+    let previous;
+    // Page output, not history: every move back to the recorded start must be judged.
+    for (let offset = 0; offset <= moves; offset += REFLOG_PAGE_SIZE) {
+      const count = Math.min(REFLOG_PAGE_SIZE, moves + 1 - offset);
+      const output = synthesisGit(git.root, [
+        "reflog",
+        "show",
+        "--skip",
+        String(offset),
+        "-n",
+        String(count),
+        "--format=%H%x00%gs",
+        "HEAD",
+      ]).trimEnd();
+      const entries = output ? output.split("\n").map((entry) => entry.split("\0")) : [];
+      if (entries.length !== count || (offset === 0 && entries[0][0] !== head)) {
+        return { reason: REFLOG_UNAVAILABLE };
+      }
+      for (const entry of entries) {
+        if (previous) {
+          const [to, subject] = previous;
+          const from = entry[0];
+          if (from !== to) {
+            const touched = synthesisGit(git.root, [
+              "diff",
+              "--name-only",
+              "--no-renames",
+              "-z",
+              from,
+              to,
+              "--",
+              ...paths,
+            ])
+              .split("\0")
+              .filter(Boolean);
+            if (touched.length) {
+              if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) return null;
+              synthesisGit(git.root, ["merge-base", "--is-ancestor", from, to]);
+              for (const file of touched) files.add(file);
+            }
+          }
+        }
+        previous = entry;
+      }
     }
-    return files;
+    if (previous?.[0] !== git.head) return { reason: REFLOG_UNAVAILABLE };
+    if (synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim() !== head) return null;
+    return { files };
   } catch {
     // Missing/pruned reflogs and non-forward history cannot establish an exemption.
   }
@@ -294,25 +326,25 @@ function fastForwardFiles(git, paths) {
  * both ends, so neither the file nor any link to it was edited directly.
  */
 function explainedByFastForward(repo, git, changed) {
-  if (!git || !changed.length) return new Set();
+  if (!git || !changed.length) return { files: new Set() };
   try {
     const chains = gitChains(git.root, repo, changed);
     const advanced = fastForwardFiles(git, [
       ...new Set([...Object.values(git.chains).flat(), ...Object.values(chains).flat()]),
     ]);
-    if (!advanced) return new Set();
+    if (!advanced?.files) return { files: new Set(), reason: advanced?.reason };
     const named = changed.filter(
       (file) =>
         git.chains[file] &&
         chains[file] &&
-        advanced.has(chains[file].at(-1)) &&
+        advanced.files.has(chains[file].at(-1)) &&
         !git.chains[file].some((relative) => git.dirty.includes(relative)),
     );
     const paths = (file) => [...new Set([...git.chains[file], ...chains[file]])];
     const dirty = dirtyPaths(git.root, [...new Set(named.flatMap(paths))]);
-    return new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative))));
+    return { files: new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative)))) };
   } catch {
-    return new Set();
+    return { files: new Set() };
   }
 }
 
@@ -356,7 +388,7 @@ function assertRepoUntouched(repo, before, workspace) {
     before.git,
     changed.filter((file) => insideRepo(file) && !searchPathSkill(file)),
   );
-  const moved = changed.filter((file) => !explained.has(file));
+  const moved = changed.filter((file) => !explained.files.has(file));
   if (!moved.length) return;
   // The fingerprint only proves a file changed, not who changed it: in a shared workspace
   // another session or a cron job can edit it mid-run. The harness is named only when the
@@ -375,6 +407,7 @@ function assertRepoUntouched(repo, before, workspace) {
   const outside = moved.filter((file) => !inside.includes(file));
   const wroteThrough = inside.filter(matchesStaging);
   const claims = [];
+  if (explained.reason) claims.push(explained.reason);
   if (inside.length) {
     claims.push(`${inside.join(", ")} changed in the repository during synthesis`);
   }
