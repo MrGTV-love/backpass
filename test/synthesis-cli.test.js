@@ -206,6 +206,90 @@ for (const { how, attributes } of [
   });
 }
 
+for (const scenario of [
+  {
+    name: "an unrelated src/ commit",
+    edit: { "src/app.js": "export const app = 2;\n" },
+    after: [
+      ["add", "src"],
+      ["commit", "-qm", "unrelated work"],
+    ],
+  },
+  {
+    name: "checkout -b tmp and back to main",
+    after: [
+      ["checkout", "-q", "-b", "tmp"],
+      ["checkout", "-q", "main"],
+    ],
+  },
+  {
+    name: "a local commit that edits AGENTS.md",
+    edit: { "AGENTS.md": `${MEMORY}\n- An unsafe committed edit.\n` },
+    after: [["commit", "-qam", "harness wrote the repository"]],
+    refused: true,
+  },
+]) {
+  test(`a fast-forward followed by ${scenario.name} is judged only on fingerprinted files`, () => {
+    const skillPath = ".agents/skills/build/SKILL.md";
+    const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";
+    const updated = original.replace("make build", "make release");
+    const dir = makeCliRepo({
+      memory: MEMORY,
+      files: { [skillPath]: original, "src/app.js": "export const app = 1;\n" },
+    });
+    const { clone, next } = upstreamCommit(dir, { [skillPath]: updated });
+    const edits = Object.fromEntries(
+      Object.entries(scenario.edit || {}).map(([name, text]) => [path.join(dir, name), text]),
+    );
+    const run = runCli(dir, ["propose", ...PIN], {
+      script: {
+        edit: { ...EDIT_TURN, ...edits },
+        repoGit: [["fetch", "-q", clone, "main"], ["merge", "--ff-only", "FETCH_HEAD"], ...scenario.after].map(
+          (args) => ({ cwd: dir, args }),
+        ),
+        annotations: [{ reply: COALESCED_ANSWER }],
+      },
+    });
+    assert.equal(gitIn(dir, ["merge-base", "--is-ancestor", next, "HEAD"]), "");
+    assert.equal(gitIn(dir, ["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+    assert.equal(fs.readFileSync(path.join(dir, skillPath), "utf8"), updated);
+    if (scenario.refused) {
+      assert.equal(run.status, 1, run.output);
+      assert.ok(run.output.includes("AGENTS.md"), run.output);
+      assert.ok(run.output.includes("changed in the repository during synthesis"), run.output);
+      assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+      assert.equal(gitIn(dir, ["status", "--porcelain", "--", "AGENTS.md"]), "");
+    } else {
+      assert.equal(run.status, 0, run.output);
+      assert.equal(proposalOf(dir).edits[0].kind, "extract");
+      assert.deepEqual(proposalOf(dir).violations ?? [], []);
+    }
+  });
+}
+
+test("a local AGENTS.md commit replayed as a fast-forward from the starting commit still refuses", () => {
+  const dir = makeCliRepo({ memory: MEMORY });
+  const start = gitIn(dir, ["rev-parse", "HEAD"]);
+  const replayed = `${MEMORY}\n- An unsafe replayed edit.\n`;
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: { ...EDIT_TURN, [path.join(dir, "AGENTS.md")]: replayed },
+      repoGit: [
+        ["commit", "-qam", "harness wrote the repository"],
+        ["checkout", "-q", "--detach", start],
+        ["merge", "-q", "--ff-only", "main"],
+      ].map((args) => ({ cwd: dir, args })),
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.match(gitIn(dir, ["reflog", "-1", "--format=%gs"]), /^merge main: Fast-forward$/);
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "AGENTS.md"]), "");
+  assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), replayed);
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("AGENTS.md changed in the repository during synthesis"), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+});
+
 test("a fast-forward does not excuse an uncommitted edit to another fingerprinted file", () => {
   const skillPath = ".agents/skills/build/SKILL.md";
   const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";

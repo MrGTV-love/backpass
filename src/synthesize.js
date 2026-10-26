@@ -237,7 +237,8 @@ function repoGitState(repo, files) {
     const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
     const root = fs.realpathSync(top);
     const chains = gitChains(root, repo, files);
-    return { root, head, chains, dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]) };
+    const moves = Number(synthesisGit(root, ["rev-list", "--walk-reflogs", "--count", "HEAD"]).trim());
+    return { root, head, moves, chains, dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]) };
   } catch {
     // User-scope memory and directory-only fixtures need not be git checkouts.
     return null;
@@ -247,29 +248,40 @@ function repoGitState(repo, files) {
 const REFLOG_LIMIT = 100;
 
 /**
- * An ancestry check alone would excuse a harness's own commit. Only ordinary merge/pull
- * fast-forwards qualify, and every intervening HEAD reflog entry must confirm that form.
- * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
- * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
- * Returns the files the fast-forward changed, or null when HEAD did not fast-forward.
+ * Every HEAD move since the snapshot (counted from the reflog length recorded then, so a
+ * return to the starting commit cannot hide earlier moves), judged only on the fingerprinted
+ * paths it changes. A move that changes none is left alone; one that does must be an
+ * ordinary merge/pull fast-forward, or the exemption is lost, since a harness's own commit,
+ * checkout, reset, or rebase looks the same as anyone else's. Reflogs describe operations, not actors: a harness
+ * can itself fast-forward (or forge a reflog). This is accidental write-through detection,
+ * not a sandbox against hostile tools. Returns the fingerprinted paths fast-forwards changed,
+ * or null when the moves cannot be accounted for.
  */
-function fastForwardFiles(git) {
+function fastForwardFiles(git, paths) {
+  if (!paths.length) return new Set();
   try {
     const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
-    if (head === git.head) return null;
-    synthesisGit(git.root, ["merge-base", "--is-ancestor", git.head, head]);
-    const entries = synthesisGit(git.root, ["reflog", "show", "-n", String(REFLOG_LIMIT), "--format=%H%x00%gs", "HEAD"])
+    const moves = Number(synthesisGit(git.root, ["rev-list", "--walk-reflogs", "--count", "HEAD"]).trim()) - git.moves;
+    if (!(moves >= 0 && moves <= REFLOG_LIMIT)) return null;
+    const entries = synthesisGit(git.root, ["reflog", "show", "-n", String(moves + 1), "--format=%H%x00%gs", "HEAD"])
       .trimEnd()
-      .split("\n");
-    for (const entry of entries) {
-      const [at, subject] = entry.split("\0");
-      if (at === git.head) {
-        return synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", git.head, head, "--"])
-          .split("\0")
-          .filter(Boolean);
-      }
-      if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) break;
+      .split("\n")
+      .map((entry) => entry.split("\0"));
+    if (entries[0]?.[0] !== head || entries[moves]?.[0] !== git.head) return null;
+    const files = new Set();
+    for (let i = 0; i < moves; i += 1) {
+      const [to, subject] = entries[i];
+      const from = entries[i + 1][0];
+      if (from === to) continue;
+      const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...paths])
+        .split("\0")
+        .filter(Boolean);
+      if (!touched.length) continue;
+      if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) return null;
+      synthesisGit(git.root, ["merge-base", "--is-ancestor", from, to]);
+      for (const file of touched) files.add(file);
     }
+    return files;
   } catch {
     // Missing/pruned reflogs and non-forward history cannot establish an exemption.
   }
@@ -277,20 +289,23 @@ function fastForwardFiles(git) {
 }
 
 /**
- * The changed fingerprinted files a clean fast-forward fully explains: the commit diff names
+ * The changed fingerprinted files a clean fast-forward fully explains: a fast-forward changed
  * the file now reached, and every path on its resolution chain, then and now, is clean at
  * both ends, so neither the file nor any link to it was edited directly.
  */
 function explainedByFastForward(repo, git, changed) {
-  const advanced = git && changed.length ? fastForwardFiles(git) : null;
-  if (!advanced) return new Set();
+  if (!git || !changed.length) return new Set();
   try {
     const chains = gitChains(git.root, repo, changed);
+    const advanced = fastForwardFiles(git, [
+      ...new Set([...Object.values(git.chains).flat(), ...Object.values(chains).flat()]),
+    ]);
+    if (!advanced) return new Set();
     const named = changed.filter(
       (file) =>
         git.chains[file] &&
         chains[file] &&
-        advanced.includes(chains[file].at(-1)) &&
+        advanced.has(chains[file].at(-1)) &&
         !git.chains[file].some((relative) => git.dirty.includes(relative)),
     );
     const paths = (file) => [...new Set([...git.chains[file], ...chains[file]])];
