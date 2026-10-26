@@ -10,21 +10,23 @@ const acpxModule = pathToFileURL(path.resolve("src/acpx.js")).href;
 const tuiModule = pathToFileURL(path.resolve("src/tui/index.js")).href;
 const progressModule = pathToFileURL(path.resolve("src/progress.js")).href;
 
-/** @type {[boolean, boolean, NodeJS.Signals][]} */
+/** @type {[boolean, boolean, NodeJS.Signals, boolean?][]} */
 const scenarios = [
   [false, true, "SIGINT"],
   [false, false, "SIGTERM"],
   [true, true, "SIGTERM"],
   [true, false, "SIGINT"],
+  [true, true, "SIGINT", true],
 ];
-for (const [session, tui, signal] of scenarios) {
+for (const [session, tui, signal, closing = false] of scenarios) {
   test(
-    `interrupting uncapped ${session ? "session" : "exec"} (${tui ? "TUI" : "plain"}, ${signal}) stops its model process`,
+    `interrupting uncapped ${session ? "session" : "exec"} (${tui ? "TUI" : "plain"}, ${signal}${closing ? ", during close" : ""}) stops its model process`,
     { skip: process.platform === "win32" && "POSIX group cancellation" },
     async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-cancel-"));
       const pidsFile = path.join(dir, "pids.json");
       const closeFile = path.join(dir, "closed");
+      const releaseFile = path.join(dir, "release-close");
       const fake = path.join(dir, "acpx");
       const promptFile = path.join(dir, "prompt.md");
       fs.writeFileSync(promptFile, "keep working");
@@ -37,6 +39,17 @@ const args = process.argv.slice(2);
 if (args.includes('sessions')) {
   if (args.includes('close')) {
     fs.writeFileSync(${JSON.stringify(closeFile)}, 'closed');
+    if (${closing}) {
+      const finish = () => {
+        if (!fs.existsSync(${JSON.stringify(releaseFile)})) return;
+        const {model} = JSON.parse(fs.readFileSync(${JSON.stringify(pidsFile)}, 'utf8'));
+        try { process.kill(-model, 'SIGKILL'); } catch {}
+        process.exit(0);
+      };
+      fs.watch(${JSON.stringify(dir)}, finish);
+      setInterval(finish, 10);
+      return;
+    }
     if (fs.existsSync(${JSON.stringify(pidsFile)})) {
       const {model} = JSON.parse(fs.readFileSync(${JSON.stringify(pidsFile)}, 'utf8'));
       try { process.kill(-model, 'SIGKILL'); } catch {}
@@ -49,7 +62,8 @@ const model = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); cons
 });
 model.stdout.once('data', () => {
   fs.writeFileSync(${JSON.stringify(pidsFile)}, JSON.stringify({acpx:process.pid,model:model.pid}));
-  console.log(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{update:{sessionUpdate:'agent_thought_chunk',content:{type:'text',text:'working'}}}}));
+  const update = {jsonrpc:'2.0',method:'session/update',params:{update:{sessionUpdate:${closing ? "'agent_message_chunk'" : "'agent_thought_chunk'"},content:{type:'text',text:'working'}}}};
+  process.stdout.write(JSON.stringify(update)+'\\n', () => { if (${closing}) process.exit(0); });
 });
 setInterval(()=>{},1000);
 `,
@@ -71,12 +85,16 @@ if (${tui}) {
   await startTui({flags:{},config:{theme:'dark',discovery:{since:'all'}},repo:{name:'cancel-smoke',worktrees:[]},version:'test'}, {stderr});
 }
 let announced=false;
-setProgressSink(() => {
-  if (!announced && fs.existsSync(${JSON.stringify(pidsFile)})) {
+const announce = () => {
+  if (!announced && fs.existsSync(${JSON.stringify(closing ? closeFile : pidsFile)})) {
     announced=true;
     process.send(JSON.parse(fs.readFileSync(${JSON.stringify(pidsFile)},'utf8')));
   }
-});
+};
+if (${closing}) {
+  fs.watch(${JSON.stringify(dir)}, announce);
+  process.on(${JSON.stringify(signal)}, () => process.send({interrupted:true}));
+} else setProgressSink(announce);
 await (${session} ? sessionPrompt : execOneShot)({agent:'codex',sessionName:'cancel-smoke',promptFile:${JSON.stringify(promptFile)},cwd:${JSON.stringify(dir)}});
 `;
       const parent = spawn(process.execPath, ["--input-type=module", "-e", script], {
@@ -96,7 +114,17 @@ await (${session} ? sessionPrompt : execOneShot)({agent:'codex',sessionName:'can
           parent.once("error", reject);
           parent.once("exit", () => reject(new Error(`parent exited before model readiness: ${stderr}`)));
         });
+        const interrupted = closing
+          ? new Promise((resolve, reject) => {
+              parent.once("message", resolve);
+              parent.once("exit", () => reject(new Error("parent exited before handling interruption")));
+            })
+          : null;
         parent.kill(signal);
+        if (interrupted) {
+          await interrupted;
+          fs.writeFileSync(releaseFile, "finish close");
+        }
         const result = await exited;
         assert.equal(result.code, signal === "SIGINT" ? 130 : 143, stderr);
         for (const [kind, pid] of Object.entries(pids)) {

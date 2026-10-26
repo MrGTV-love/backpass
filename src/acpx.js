@@ -96,7 +96,8 @@ async function run(args, options = {}) {
   const { promise: completed, resolve: finish } = /** @type {PromiseWithResolvers<void>} */ (Promise.withResolvers());
   let result;
   const unregister = registerModelCleanup(async () => {
-    controller.abort();
+    // Interruption must await an owner-closing command, never abort that cleanup.
+    if (!cleanup) controller.abort();
     await completed;
   });
   try {
@@ -692,24 +693,28 @@ export async function openSession({
   }
 
   const startedAt = Date.now();
-  let closed = false;
+  /** @type {Promise<void> | null} */
+  let closePromise = null;
   let firstPromptFile = null;
   let storeUsageSeen = null;
 
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    try {
-      const result = await run([...acpxAgentArgs, "sessions", "close", sessionName], {
-        cleanup: true,
-        cwd,
-        env: invocation.env,
-      });
-      if (result.code !== 0) warn(`could not close acpx session ${sessionName}`);
-    } finally {
-      unregisterSession();
-      invocation.dispose();
+  const close = () => {
+    if (!closePromise) {
+      closePromise = (async () => {
+        try {
+          const result = await run([...acpxAgentArgs, "sessions", "close", sessionName], {
+            cleanup: true,
+            cwd,
+            env: invocation.env,
+          });
+          if (result.code !== 0) warn(`could not close acpx session ${sessionName}`);
+        } finally {
+          unregisterSession();
+          invocation.dispose();
+        }
+      })();
     }
+    return closePromise;
   };
   // acpx's named-session queue owner is outside the prompt CLI's process group.
   // sessions close stops that owner (acpx 0.19.4 queue-owner-runtime:5700-5722).
@@ -761,7 +766,7 @@ export async function openSession({
     approveAll = false,
     suppressReads = true,
   }) => {
-    if (closed) throw new AcpxError(`acpx ${agent} session ${sessionName} is closed`);
+    if (closePromise) throw new AcpxError(`acpx ${agent} session ${sessionName} is closed`);
     firstPromptFile = firstPromptFile || promptFile;
     const args = [
       ...baseArgs({ cwd, model: null, timeoutSeconds, approveReads, approveAll, suppressReads }),

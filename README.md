@@ -837,6 +837,7 @@ silence between ACP JSON events (both default to `null`, disabled). Silent reaso
 proof of a stall: the live view reports `no model activity for <duration>` without stopping
 work. acpx's own configured timeouts can still end a call. Ctrl-C or SIGTERM cancels active
 ACP process groups and closes named sessions before backpass exits, including in the live view.
+If a session is already closing, interruption waits for that cleanup rather than aborting it.
 
 Each prompt writes a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
 event count, longest activity gap and a base-2 millisecond gap histogram. Gaps include startup
