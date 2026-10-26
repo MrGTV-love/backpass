@@ -519,16 +519,18 @@ most two). If those also fail, backpass **fails loudly** and preserves the lates
 rejected proposal, if one was produced. It never silently truncates. A harness that writes
 past the staging copy into the repo is an error, never an apply.
 
-A clean Git fast-forward during synthesis does not discard the proposal: a changed
-tracked file must match its committed contents both before and after the move, have no
-uncommitted changes, and be named by the intervening commit diff. Every intervening HEAD
-reflog entry must describe a merge/pull fast-forward. Local commits or rewrites that
-change files, and new Git-visible dirty/untracked changes, still refuse the run and name
-the changed paths. Existing unchanged dirty files are left alone. Read-only search-path
-skills and paths outside the repository retain their strict fingerprint checks. This detects ordinary harness-made
-commits, but cannot identify who performed a fast-forward or detect forged reflog entries:
-it is a write-through check, not a security sandbox. The proposal still uses the staging
-originals, and apply still refuses if its target files have drifted.
+Only the fingerprinted memory and skill files are checked; edits, commits, and new files
+elsewhere in the checkout are left alone. A fingerprinted file that a clean Git fast-forward
+changed during synthesis does not discard the proposal: Git must report it clean before and
+after the move, the intervening commit diff must name it (a symlinked pointer such as
+`CLAUDE.md` -> `AGENTS.md` is matched by its target), and the HEAD reflog must reach the
+starting commit within its newest 100 entries through merge or pull fast-forwards only. Any other change
+to a fingerprinted file still refuses the run and names it, including a local commit, a
+rewrite, or an uncommitted edit. Read-only search-path skills and paths outside the
+repository keep the strict check. This catches ordinary harness-made commits, but it cannot
+tell who ran a fast-forward or detect a forged reflog entry: it is a write-through check,
+not a security sandbox. The proposal still uses the staging originals, and apply still
+refuses if its target files have drifted.
 
 Not every annotate turn is an answer, and the three cases are kept apart because they call
 for different things:

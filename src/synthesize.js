@@ -15,7 +15,7 @@ import {
   resolveProjectSkillDirs,
   skillDescriptionTokens,
 } from "./skills.js";
-import { isSuppressedByRejection, sha256 } from "./state.js";
+import { isSuppressedByRejection } from "./state.js";
 import { SURFACE_TARGET } from "./target.js";
 import { emitProgress } from "./progress.js";
 import {
@@ -158,60 +158,110 @@ function harnessCountsOf(transcripts) {
   return counts;
 }
 
-function synthesisGit(repo, args) {
-  return execFileSync("git", args, { cwd: repo.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+function synthesisGit(cwd, args) {
+  return execFileSync("git", ["--literal-pathspecs", ...args], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
 }
 
-/** Dirty paths include new files, not just the memory paths known before the turn. */
-function repoGitState(repo) {
-  let head;
+function realPath(absolute) {
   try {
-    head = synthesisGit(repo, ["rev-parse", "--verify", "HEAD"]).trim();
+    return fs.realpathSync(absolute);
   } catch {
-    // User-scope memory and directory-only fixtures need not be git checkouts.
-    return null;
+    const parent = path.dirname(absolute);
+    return parent === absolute ? absolute : path.join(realPath(parent), path.basename(absolute));
   }
-  const entries = synthesisGit(repo, [
+}
+
+/** Fingerprinted keys as git names them: a symlinked pointer or skills dir maps to its target. */
+function gitPaths(top, repo, files) {
+  const out = {};
+  for (const file of files) {
+    const relative = path.relative(top, realPath(repoFilePath(repo, file)));
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      out[file] = relative.split(path.sep).join("/");
+    }
+  }
+  return out;
+}
+
+/** Git's own clean check, so checkout filters (autocrlf, smudge) do not read as edits. */
+function dirtyPaths(top, paths) {
+  if (!paths.length) return [];
+  return synthesisGit(top, [
     "--no-optional-locks",
     "status",
     "--porcelain=v1",
     "-z",
     "--untracked-files=all",
     "--no-renames",
+    "--",
+    ...paths,
   ])
     .split("\0")
-    .filter(Boolean);
-  const statuses = Object.fromEntries(entries.map((entry) => [entry.slice(3), entry.slice(0, 2)]));
-  const hashes = repoFingerprint(repo, Object.keys(statuses));
-  return {
-    head,
-    dirty: Object.fromEntries(Object.entries(statuses).map(([file, status]) => [file, `${status}:${hashes[file]}`])),
-  };
+    .filter(Boolean)
+    .map((entry) => entry.slice(3));
 }
+
+/** Only the fingerprinted files are inspected; the rest of the checkout is not backpass's to judge. */
+function repoGitState(repo, files) {
+  try {
+    const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
+    const root = fs.realpathSync(top);
+    return { root, head, dirty: dirtyPaths(root, Object.values(gitPaths(root, repo, files))) };
+  } catch {
+    // User-scope memory and directory-only fixtures need not be git checkouts.
+    return null;
+  }
+}
+
+const REFLOG_LIMIT = 100;
 
 /**
  * An ancestry check alone would excuse a harness's own commit. Only ordinary merge/pull
  * fast-forwards qualify, and every intervening HEAD reflog entry must confirm that form.
  * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
  * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
+ * Returns the files the fast-forward changed, or null when HEAD did not fast-forward.
  */
-function committedAdvance(repo, before, after) {
-  if (before.head === after.head) return { files: [], fastForward: false };
-  const files = synthesisGit(repo, ["diff", "--name-only", "--no-renames", "-z", before.head, after.head, "--"])
-    .split("\0")
-    .filter(Boolean);
+function fastForwardFiles(git) {
   try {
-    synthesisGit(repo, ["merge-base", "--is-ancestor", before.head, after.head]);
-    const entries = synthesisGit(repo, ["reflog", "show", "--format=%H%x00%gs", "HEAD"]).trimEnd().split("\n");
+    const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
+    if (head === git.head) return null;
+    synthesisGit(git.root, ["merge-base", "--is-ancestor", git.head, head]);
+    const entries = synthesisGit(git.root, ["reflog", "show", "-n", String(REFLOG_LIMIT), "--format=%H%x00%gs", "HEAD"])
+      .trimEnd()
+      .split("\n");
     for (const entry of entries) {
-      const [head, subject] = entry.split("\0");
-      if (head === before.head) return { files, fastForward: true };
-      if (!/^(merge |pull ).*: Fast-forward$/.test(subject)) break;
+      const [at, subject] = entry.split("\0");
+      if (at === git.head) {
+        return synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", git.head, head, "--"])
+          .split("\0")
+          .filter(Boolean);
+      }
+      if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) break;
     }
   } catch {
     // Missing/pruned reflogs and non-forward history cannot establish an exemption.
   }
-  return { files, fastForward: false };
+  return null;
+}
+
+/** The changed fingerprinted files a clean fast-forward fully explains: named by it, clean before and after. */
+function explainedByFastForward(repo, git, changed) {
+  const advanced = git && changed.length ? fastForwardFiles(git) : null;
+  if (!advanced) return new Set();
+  const named = Object.entries(gitPaths(git.root, repo, changed)).filter(([, relative]) => advanced.includes(relative));
+  const relatives = named.map(([, relative]) => relative);
+  let dirty;
+  try {
+    dirty = [...git.dirty, ...dirtyPaths(git.root, relatives)];
+  } catch {
+    return new Set();
+  }
+  return new Set(named.filter(([, relative]) => !dirty.includes(relative)).map(([file]) => file));
 }
 
 /**
@@ -235,15 +285,8 @@ function committedAdvance(repo, before, after) {
  */
 function assertRepoUntouched(repo, before, workspace) {
   const after = repoFingerprint(repo, Object.keys(before.files));
-  const gitAfter = before.git ? repoGitState(repo) : null;
-  if (before.git && !gitAfter)
-    throw new UserError("could not inspect repository git state during synthesis; nothing was proposed");
-  const advance = gitAfter ? committedAdvance(repo, before.git, gitAfter) : { files: [], fastForward: false };
-  const dirtyChanges = gitAfter
-    ? [...new Set([...Object.keys(before.git.dirty), ...Object.keys(gitAfter.dirty)])].filter(
-        (file) => before.git.dirty[file] !== gitAfter.dirty[file],
-      )
-    : [];
+  const changed = Object.keys(before.files).filter((file) => before.files[file] !== after[file]);
+  if (!changed.length) return;
   const insideRepo = (file) => {
     try {
       resolveMemoryPath(repo.root, file);
@@ -252,36 +295,16 @@ function assertRepoUntouched(repo, before, workspace) {
       return false;
     }
   };
-  const explainedByCommit = (file) => {
-    const relative = path.relative(repo.root, repoFilePath(repo, file)).split(path.sep).join("/");
-    if (!advance.fastForward || !insideRepo(file) || !advance.files.includes(relative)) return false;
-    if (relative in before.git.dirty || relative in gitAfter.dirty) return false;
-    if (
-      workspace.unstageable.some(
-        (entry) => entry.reason === READ_ONLY_SEARCH_PATH && (file === entry.path || file.startsWith(`${entry.path}/`)),
-      )
-    )
-      return false;
-    const committedHash = (head) => {
-      try {
-        return sha256(synthesisGit(repo, ["show", `${head}:${relative}`]));
-      } catch {
-        return null;
-      }
-    };
-    return before.files[file] === committedHash(before.git.head) && after[file] === committedHash(gitAfter.head);
-  };
-  const withheld = (file) =>
+  const searchPathSkill = (file) =>
     workspace.unstageable.some(
-      (entry) => entry.reason !== READ_ONLY_SEARCH_PATH && (file === entry.path || file.startsWith(`${entry.path}/`)),
+      (entry) => entry.reason === READ_ONLY_SEARCH_PATH && (file === entry.path || file.startsWith(`${entry.path}/`)),
     );
-  const moved = [
-    ...new Set([
-      ...Object.keys(before.files).filter((file) => before.files[file] !== after[file] && !explainedByCommit(file)),
-      ...dirtyChanges.filter((file) => !withheld(file)),
-      ...(advance.fastForward ? [] : advance.files.filter((file) => !withheld(file))),
-    ]),
-  ];
+  const explained = explainedByFastForward(
+    repo,
+    before.git,
+    changed.filter((file) => insideRepo(file) && !searchPathSkill(file)),
+  );
+  const moved = changed.filter((file) => !explained.has(file));
   if (!moved.length) return;
   // The fingerprint only proves a file changed, not who changed it: in a shared workspace
   // another session or a cron job can edit it mid-run. The harness is named only when the
@@ -748,22 +771,18 @@ export async function synthesizeProposal({
   // it has to be detected, not silently excused the way an ordinary withheld skill is
   // (design note above `assertRepoUntouched`). It stays in the fingerprint so a change
   // there still fails the run loudly.
-  const fingerprint = {
-    git: repoGitState(repo),
-    files: repoFingerprint(repo, [
-      ...new Set(
-        [memoryFile.path, ...config.memoryFiles, ...(config.nestedMemoryFiles || []), routing?.rootPath].filter(
-          Boolean,
-        ),
-      ),
-      ...skillFiles
-        .filter((skill) => {
-          const reason = readOnlyReason(skill.path);
-          return !reason || reason === READ_ONLY_SEARCH_PATH;
-        })
-        .map((skill) => skill.path),
-    ]),
-  };
+  const fingerprintFiles = [
+    ...new Set(
+      [memoryFile.path, ...config.memoryFiles, ...(config.nestedMemoryFiles || []), routing?.rootPath].filter(Boolean),
+    ),
+    ...skillFiles
+      .filter((skill) => {
+        const reason = readOnlyReason(skill.path);
+        return !reason || reason === READ_ONLY_SEARCH_PATH;
+      })
+      .map((skill) => skill.path),
+  ];
+  const fingerprint = { files: repoFingerprint(repo, fingerprintFiles), git: repoGitState(repo, fingerprintFiles) };
   const sessionName = `backpass-synth-${process.pid}`;
   const timeoutSeconds = Math.max(config.timeoutSeconds, 900);
   const usage = [];

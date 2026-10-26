@@ -6,7 +6,14 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { annotatePrompts, makeCliRepo, readJson, runCli, snapshotTree } from "./helpers/synthesis-cli.js";
+import {
+  annotatePrompts,
+  makeCliRepo,
+  makeCliUserHome,
+  readJson,
+  runCli,
+  snapshotTree,
+} from "./helpers/synthesis-cli.js";
 
 /**
  * The synthesis orchestration, through `backpass propose` as a user runs it.
@@ -140,49 +147,160 @@ const SPLIT_THE_COPY = { editFirst: { "AGENTS.md": { replace: [[POINTERS, SPLIT]
 const proposalOf = (dir) => readJson(path.join(dir, ".backpass", "proposal.json"));
 const stagedTree = (dir) => snapshotTree(path.join(dir, ".backpass", "synthesis"));
 
-for (const stray of [null, "unexpected.md"]) {
-  test(
-    stray
-      ? "a fast-forward does not excuse a new untracked file"
-      : "a clean fast-forward during synthesis preserves the measured proposal",
-    () => {
-      const skillPath = ".agents/skills/build/SKILL.md";
-      const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";
-      const updated = original.replace("make build", "make release");
-      const dir = makeCliRepo({ memory: MEMORY, files: { [skillPath]: original } });
-      const clone = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-updater-"));
-      const git = (cwd, args) =>
-        execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-      git(clone, ["clone", "-q", dir, "."]);
-      git(clone, ["config", "user.email", "test@example.com"]);
-      git(clone, ["config", "user.name", "test"]);
-      fs.writeFileSync(path.join(clone, skillPath), updated);
-      git(clone, ["commit", "-qam", "update build skill"]);
-      const next = git(clone, ["rev-parse", "HEAD"]);
-      const run = runCli(dir, ["propose", ...PIN], {
-        script: {
-          edit: { ...EDIT_TURN, ...(stray ? { [path.join(dir, stray)]: "Unexpected repository write.\n" } : {}) },
-          repoGit: [
-            { cwd: dir, args: ["fetch", "-q", clone, "main"] },
-            { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
-          ],
-          annotations: [{ reply: COALESCED_ANSWER }],
-        },
-      });
-      assert.equal(git(dir, ["rev-parse", "HEAD"]), next);
-      assert.equal(fs.readFileSync(path.join(dir, skillPath), "utf8"), updated);
-      if (stray) {
-        assert.equal(run.status, 1, run.output);
-        assert.ok(run.output.includes(`${stray} changed in the repository during synthesis`), run.output);
-        assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
-      } else {
-        assert.equal(run.status, 0, run.output);
-        assert.equal(proposalOf(dir).edits[0].kind, "extract");
-        assert.deepEqual(proposalOf(dir).violations ?? [], []);
-      }
-    },
-  );
+const gitIn = (cwd, args) =>
+  execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+/** A clone that commits `files` over `dir`'s history, for the target checkout to fast-forward to. */
+function upstreamCommit(dir, files) {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-updater-"));
+  gitIn(clone, ["clone", "-q", dir, "."]);
+  gitIn(clone, ["config", "user.email", "test@example.com"]);
+  gitIn(clone, ["config", "user.name", "test"]);
+  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(clone, name), text);
+  gitIn(clone, ["commit", "-qam", "upstream update"]);
+  return { clone, next: gitIn(clone, ["rev-parse", "HEAD"]) };
 }
+
+for (const { how, attributes } of [
+  { how: "merge" },
+  { how: "pull" },
+  { how: "merge", attributes: "*.md text eol=crlf\n" },
+]) {
+  const label = attributes ? `${how} fast-forward under eol=crlf` : `${how} fast-forward`;
+  test(`a clean ${label} during synthesis preserves the measured proposal`, () => {
+    const skillPath = ".agents/skills/build/SKILL.md";
+    const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";
+    const updated = original.replace("make build", "make release");
+    const dir = makeCliRepo({
+      memory: MEMORY,
+      files: { [skillPath]: original, ...(attributes ? { ".gitattributes": attributes } : {}) },
+    });
+    const { clone, next } = upstreamCommit(dir, { [skillPath]: updated });
+    if (how === "pull") {
+      gitIn(dir, ["remote", "add", "origin", clone]);
+      gitIn(dir, ["fetch", "-q", "origin"]);
+      gitIn(dir, ["branch", "-q", "-u", "origin/main"]);
+    }
+    const run = runCli(dir, ["propose", ...PIN], {
+      script: {
+        edit: EDIT_TURN,
+        repoGit:
+          how === "pull"
+            ? [{ cwd: dir, args: ["-c", "pull.rebase=false", "pull"] }]
+            : [
+                { cwd: dir, args: ["fetch", "-q", clone, "main"] },
+                { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
+              ],
+        annotations: [{ reply: COALESCED_ANSWER }],
+      },
+    });
+    assert.equal(gitIn(dir, ["rev-parse", "HEAD"]), next);
+    if (how === "pull") assert.match(gitIn(dir, ["reflog", "-1", "--format=%gs"]), /^pull: Fast-forward$/);
+    assert.equal(
+      fs.readFileSync(path.join(dir, skillPath), "utf8"),
+      attributes ? updated.replaceAll("\n", "\r\n") : updated,
+    );
+    assert.equal(run.status, 0, run.output);
+    assert.equal(proposalOf(dir).edits[0].kind, "extract");
+    assert.deepEqual(proposalOf(dir).violations ?? [], []);
+  });
+}
+
+test("a fast-forward does not excuse an uncommitted edit to another fingerprinted file", () => {
+  const skillPath = ".agents/skills/build/SKILL.md";
+  const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";
+  const dir = makeCliRepo({ memory: MEMORY, files: { [skillPath]: original } });
+  const { clone } = upstreamCommit(dir, { [skillPath]: original.replace("make build", "make release") });
+  const direct = `${MEMORY}\n- An unsafe direct edit.\n`;
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: { ...EDIT_TURN, [path.join(dir, "AGENTS.md")]: direct },
+      repoGit: [
+        { cwd: dir, args: ["fetch", "-q", clone, "main"] },
+        { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
+      ],
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("AGENTS.md changed in the repository during synthesis"), run.output);
+  assert.ok(!run.output.includes(skillPath), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+  assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), direct);
+});
+
+test("a fast-forward through a symlinked CLAUDE.md pointer preserves the measured proposal", () => {
+  const dir = makeCliRepo({ memory: MEMORY, links: { "CLAUDE.md": "AGENTS.md" } });
+  const updated = MEMORY.replace("- Never use the em dash.", "- Never use the em dash or en dash.");
+  const { clone, next } = upstreamCommit(dir, { "AGENTS.md": updated });
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: EDIT_TURN,
+      repoGit: [
+        { cwd: dir, args: ["fetch", "-q", clone, "main"] },
+        { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
+      ],
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.equal(gitIn(dir, ["rev-parse", "HEAD"]), next, run.output);
+  assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), updated);
+  assert.ok(!run.output.includes("changed in the repository during synthesis"), run.output);
+  assert.equal(run.status, 0, run.output);
+  assert.equal(proposalOf(dir).edits[0].kind, "extract");
+});
+
+for (const scenario of [
+  { name: "an uncommitted src/ edit and new file", git: [] },
+  {
+    name: "an unrelated src/ commit",
+    git: [
+      ["add", "src"],
+      ["commit", "-qm", "unrelated work"],
+    ],
+  },
+]) {
+  test(`${scenario.name} outside the fingerprint does not discard synthesis`, () => {
+    const dir = makeCliRepo({ memory: MEMORY, files: { "src/app.js": "export const app = 1;\n" } });
+    const run = runCli(dir, ["propose", ...PIN], {
+      script: {
+        edit: {
+          ...EDIT_TURN,
+          [path.join(dir, "src", "app.js")]: "export const app = 2;\n",
+          [path.join(dir, "src", "new.js")]: "export const fresh = true;\n",
+        },
+        repoGit: scenario.git.map((args) => ({ cwd: dir, args })),
+        annotations: [{ reply: COALESCED_ANSWER }],
+      },
+    });
+    assert.equal(run.status, 0, run.output);
+    assert.equal(proposalOf(dir).edits[0].kind, "extract");
+    assert.equal(fs.readFileSync(path.join(dir, "src", "app.js"), "utf8"), "export const app = 2;\n");
+    assert.equal(fs.readFileSync(path.join(dir, "src", "new.js"), "utf8"), "export const fresh = true;\n");
+  });
+}
+
+test("user scope with a git-tracked HOME is not refused for churn outside the fingerprint", () => {
+  const project = makeCliRepo({ memory: MEMORY });
+  const { home, env } = makeCliUserHome({ memory: MEMORY, project });
+  const run = runCli(project, ["propose", "--scope", "user", ...PIN], {
+    env,
+    script: {
+      edit: {
+        ".agents/AGENTS.md": { replace: [[BOTH_SECTIONS, POINTERS]] },
+        "__SKILLS_DIR__/release-checklist/SKILL.md": skill("release-checklist"),
+        "__SKILLS_DIR__/incident-response/SKILL.md": skill("incident-response"),
+        [path.join(home, ".zsh_history")]: "git status\n",
+      },
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.equal(run.status, 0, run.output);
+  const proposal = readJson(path.join(home, ".config", "backpass", "user", "proposal.json"));
+  assert.equal(proposal.scope, "user");
+  assert.equal(proposal.edits[0].kind, "extract");
+  assert.ok(gitIn(home, ["status", "--porcelain"]).includes(".zsh_history"));
+});
 
 for (const scenario of [
   { name: "uncommitted tracked edit", file: "AGENTS.md", text: `${MEMORY}\n- An unsafe direct edit.\n` },
@@ -192,7 +310,6 @@ for (const scenario of [
     text: `${MEMORY}\n- An unsafe staged edit.\n`,
     git: [["add", "AGENTS.md"]],
   },
-  { name: "untracked new file", file: "new-instructions.md", text: "Unsafe new instructions.\n" },
   {
     name: "harness-made commit",
     file: "AGENTS.md",
