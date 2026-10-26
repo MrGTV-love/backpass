@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { UserError, warn } from "./logger.js";
 import { runCapture } from "./subprocess.js";
 import { captureModelActivity } from "./model-activity.js";
+import { cancelModelCalls, isCancellingModelCalls, registerModelCleanup } from "./model-cancellation.js";
 import { prepareHarnessInvocation } from "./harness-invoke.js";
 import * as piStore from "./discovery/adapters/pi.js";
 import { readJsonl } from "./discovery/adapters/shared.js";
@@ -86,18 +87,38 @@ export class AcpxError extends Error {
  * candidate would fail on the very same argument.
  *
  * @param {string[]} args
- * @param {{ timeoutMs?: number, signal?: AbortSignal, captureStdout?: boolean, onStdout?: (chunk: Buffer) => void, cwd?: string, input?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ cleanup?: boolean, timeoutMs?: number, signal?: AbortSignal, captureStdout?: boolean, onStdout?: (chunk: Buffer) => void, cwd?: string, input?: string, env?: NodeJS.ProcessEnv }} [options]
  */
 async function run(args, options = {}) {
-  const result = await runCapture(ACPX_BIN, args, options);
-  const spawnError = result.spawnError;
-  if (spawnError?.code === "ERR_WINDOWS_SHIM_UNSAFE_ARG") {
-    const value = spawnError.value === undefined ? "" : JSON.stringify(String(spawnError.value));
-    throw new UserError(
-      `backpass refused to pass ${value} to ${ACPX_BIN} through the Windows command interpreter`,
-      spawnError.message,
-    );
+  const { cleanup = false, ...captureOptions } = options;
+  if (isCancellingModelCalls() && !cleanup) throw new AcpxError("backpass interrupted");
+  const controller = new AbortController();
+  const { promise: completed, resolve: finish } = /** @type {PromiseWithResolvers<void>} */ (Promise.withResolvers());
+  let result;
+  const unregister = registerModelCleanup(async () => {
+    controller.abort();
+    await completed;
+  });
+  try {
+    const signal = captureOptions.signal
+      ? AbortSignal.any([captureOptions.signal, controller.signal])
+      : controller.signal;
+    result = await runCapture(ACPX_BIN, args, { ...captureOptions, signal });
+    const spawnError = result.spawnError;
+    if (spawnError?.code === "ERR_WINDOWS_SHIM_UNSAFE_ARG") {
+      const value = spawnError.value === undefined ? "" : JSON.stringify(String(spawnError.value));
+      throw new UserError(
+        `backpass refused to pass ${value} to ${ACPX_BIN} through the Windows command interpreter`,
+        spawnError.message,
+      );
+    }
+  } finally {
+    unregister();
+    finish();
   }
+  // A cancelled prompt must not unwind the CLI before the independent queue owner
+  // has closed. Resolve this capture's cleanup first, so waiting here cannot cycle.
+  if (isCancellingModelCalls() && !cleanup) await cancelModelCalls();
   return result;
 }
 
@@ -680,14 +701,19 @@ export async function openSession({
     closed = true;
     try {
       const result = await run([...acpxAgentArgs, "sessions", "close", sessionName], {
+        cleanup: true,
         cwd,
         env: invocation.env,
       });
       if (result.code !== 0) warn(`could not close acpx session ${sessionName}`);
     } finally {
+      unregisterSession();
       invocation.dispose();
     }
   };
+  // acpx's named-session queue owner is outside the prompt CLI's process group.
+  // sessions close stops that owner (acpx 0.19.4 queue-owner-runtime:5700-5722).
+  const unregisterSession = registerModelCleanup(close);
 
   try {
     if (invocation.sessionMode) {

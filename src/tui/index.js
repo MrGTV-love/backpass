@@ -13,6 +13,7 @@
  */
 
 import { DEFAULT_MAX_EDITS } from "../proposal.js";
+import { cancelModelCalls } from "../model-cancellation.js";
 import { clearProgressSink, setProgressSink } from "../progress.js";
 import { setLoggerSink } from "../logger.js";
 import { colorDepth, detectBackground, tuiEligible } from "./term.js";
@@ -300,12 +301,14 @@ class Tui {
     this.timer = null;
     this.onEvent = this.onEvent.bind(this);
     this.onResize = () => this.paint(true);
-    this.onSigint = () => {
+    this.onSigint = async () => {
       this.stop();
+      await cancelModelCalls();
       process.exit(130);
     };
-    this.onSigterm = () => {
+    this.onSigterm = async () => {
       this.stop();
+      await cancelModelCalls();
       process.exit(143);
     };
     this.onExit = () => {

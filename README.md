@@ -835,7 +835,8 @@ Model turns have **no default wall-clock or stall cap**. Set `timeoutSeconds` to
 number for an explicit user wall-clock cap, or `stallTimeoutSeconds` for an explicit cap on
 silence between ACP JSON events (both default to `null`, disabled). Silent reasoning is not
 proof of a stall: the live view reports `no model activity for <duration>` without stopping
-work. acpx's own configured timeouts can still end a call.
+work. acpx's own configured timeouts can still end a call. Ctrl-C or SIGTERM cancels active
+ACP process groups and closes named sessions before backpass exits, including in the live view.
 
 Each prompt writes a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
 event count, longest activity gap and a base-2 millisecond gap histogram. Gaps include startup
