@@ -18,7 +18,7 @@ import path from "node:path";
  *
  * @param {string} bin
  * @param {string[]} args
- * @param {{ timeoutMs?: number, cwd?: string, input?: string, env?: NodeJS.ProcessEnv,
+ * @param {{ timeoutMs?: number, signal?: AbortSignal, cwd?: string, input?: string, env?: NodeJS.ProcessEnv,
  *   platform?: NodeJS.Platform, lookupEnv?: NodeJS.ProcessEnv,
  *   captureStdout?: boolean, onStdout?: (chunk: Buffer) => void,
  *   spawnFn?: (file: string, args: string[], options: object) => any }} [options]
@@ -29,6 +29,7 @@ export function runCapture(
   args,
   {
     timeoutMs,
+    signal,
     cwd,
     input,
     env,
@@ -58,25 +59,27 @@ export function runCapture(
       // Give a timed command its own POSIX process group. acpx launches adapter
       // wrappers and harnesses below itself, and killing acpx alone leaves those
       // descendants running with our capture pipes open.
-      detached: platform !== "win32" && Boolean(timeoutMs),
+      detached: platform !== "win32" && Boolean(timeoutMs || signal),
     });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
     let escalationTimer = null;
 
-    const timer = timeoutMs
-      ? setTimeout(() => {
-          timedOut = true;
-          if (platform === "win32") {
-            killWindowsTree(child.pid);
-            return;
-          }
-          killPosixGroup(child, "SIGTERM");
-          escalationTimer = setTimeout(() => killPosixGroup(child, "SIGKILL"), 5000);
-          escalationTimer.unref();
-        }, timeoutMs)
-      : null;
+    const terminate = () => {
+      if (timedOut) return;
+      timedOut = true;
+      if (platform === "win32") {
+        killWindowsTree(child.pid);
+        return;
+      }
+      killPosixGroup(child, "SIGTERM");
+      escalationTimer = setTimeout(() => killPosixGroup(child, "SIGKILL"), 5000);
+      escalationTimer.unref();
+    };
+    const timer = timeoutMs ? setTimeout(terminate, timeoutMs) : null;
+    signal?.addEventListener("abort", terminate, { once: true });
+    if (signal?.aborted) terminate();
 
     child.stdout.on("data", (d) => {
       const chunk = Buffer.isBuffer(d) ? d : Buffer.from(d);
@@ -87,14 +90,16 @@ export function runCapture(
       stderr += d;
     });
     child.on("error", (err) => {
-      if (timer) clearTimeout(timer);
-      if (escalationTimer) clearTimeout(escalationTimer);
+      signal?.removeEventListener("abort", terminate);
+      clearTimeout(timer);
+      clearTimeout(escalationTimer);
       resolve({ code: null, stdout, stderr: `${stderr}${err.message}`, spawnError: err });
     });
     child.on("close", (code) => {
-      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", terminate);
+      clearTimeout(timer);
       if (timedOut && platform !== "win32") killPosixGroup(child, "SIGKILL");
-      if (escalationTimer) clearTimeout(escalationTimer);
+      clearTimeout(escalationTimer);
       resolve({ code, stdout, stderr, timedOut });
     });
 

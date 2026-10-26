@@ -50,6 +50,7 @@ export function initialState(meta) {
   return {
     meta,
     memory: null,
+    modelCalls: {},
     discover: {
       status: "pending",
       startedAt: null,
@@ -116,6 +117,12 @@ export function reduceEvent(state, event, data, now = Date.now()) {
   const { discover: d, analyze: a, fold: f, synthesize: s } = state;
 
   switch (event) {
+    case "model:activity":
+      state.modelCalls[data.id] = data;
+      break;
+    case "model:activity:end":
+      delete state.modelCalls[data.id];
+      break;
     case "memory":
       state.memory = {
         path: data.path,

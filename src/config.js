@@ -126,7 +126,10 @@ export const DEFAULT_CONFIG = {
     includeCursorIde: false,
   },
   jobs: 4,
-  timeoutSeconds: 300,
+  /** Explicit user wall-clock cap only; null never kills a working model turn. */
+  timeoutSeconds: null,
+  /** No measured idle/loaded silence bound yet; *.activity.jsonl calibrates a future default. */
+  stallTimeoutSeconds: null,
   promptRetries: 1,
   /** Live progress ink set: "auto" queries the terminal background, or force "dark" / "light". */
   theme: "auto",
@@ -334,6 +337,11 @@ export function sinceCutoff(since, now = Date.now()) {
 }
 
 function validate(config, { kind = "project", repoRoot = null } = {}) {
+  for (const key of ["timeoutSeconds", "stallTimeoutSeconds"]) {
+    if (config[key] !== null && (!Number.isFinite(config[key]) || config[key] <= 0)) {
+      throw new UserError(`config.${key} must be a positive number or null to disable the cap`);
+    }
+  }
   if (!Array.isArray(config.memoryFiles) || config.memoryFiles.length === 0) {
     throw new UserError("config.memoryFiles must be a non-empty array");
   }

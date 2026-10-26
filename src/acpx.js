@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { UserError, warn } from "./logger.js";
 import { runCapture } from "./subprocess.js";
+import { captureModelActivity } from "./model-activity.js";
 import { prepareHarnessInvocation } from "./harness-invoke.js";
 import * as piStore from "./discovery/adapters/pi.js";
 import { readJsonl } from "./discovery/adapters/shared.js";
@@ -85,7 +86,7 @@ export class AcpxError extends Error {
  * candidate would fail on the very same argument.
  *
  * @param {string[]} args
- * @param {{ timeoutMs?: number, cwd?: string, input?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, signal?: AbortSignal, captureStdout?: boolean, onStdout?: (chunk: Buffer) => void, cwd?: string, input?: string, env?: NodeJS.ProcessEnv }} [options]
  */
 async function run(args, options = {}) {
   const result = await runCapture(ACPX_BIN, args, options);
@@ -103,19 +104,6 @@ async function run(args, options = {}) {
 function notFoundError(result) {
   return new AcpxError(`acpx not found on PATH (looked for "${ACPX_BIN}")`, result);
 }
-
-/**
- * How long `acpx <agent> sessions new` may take before backpass kills it.
- *
- * acpx spawns most built-in ACP adapters through an npm package-exec bridge
- * (`acpx --verbose` prints it: `npm exec --yes --package=@agentclientprotocol/codex-acp@...`,
- * `npx pi-acp@...`), so session create can include a cold package install before the
- * adapter process exists at all. The codex adapter alone pulls a ~270MB platform binary,
- * which no 60s budget can cover on a first run; npm also performs a registry
- * security-advisory round-trip per spawn, which stalls session create when that endpoint
- * is slow. An agent acpx launches as a local binary (grok) never pays either cost.
- */
-export const SESSION_CREATE_TIMEOUT_MS = 180_000;
 
 /**
  * acpx's own exit code for a call it ended at a timeout (`EXIT_CODES.TIMEOUT` in acpx):
@@ -302,8 +290,8 @@ const BLANK_AT_BUDGET_FLOOR = 0.9;
  * Name a clean exit that produced no text after consuming (almost) the whole
  * `--timeout` budget as the acpx timeout kill it is - by timeout, not `empty-output`.
  *
- * backpass enforces the model budget with an outer kill of its own at budget + 30s
- * (`result.timedOut`), but acpx enforces `--timeout` first. Older acpx versions can
+ * An explicit user cap is passed to acpx and enforced by backpass as well
+ * (`result.timedOut`). With no user cap neither layer gets a default budget. Older acpx versions can
  * exit clean with blank output when the harness dies at the budget, so the outer kill
  * never fires. Explicit timeout exits are handled separately by `endedAtTimeout`.
  * Read generically that blank result reaches
@@ -381,7 +369,7 @@ function baseArgs({ cwd, model, timeoutSeconds, approveReads, approveAll = false
   args.push("--non-interactive-permissions", "deny");
   if (timeoutSeconds) args.push("--timeout", String(timeoutSeconds));
   if (model) args.push("--model", model);
-  args.push("--format", "quiet");
+  args.push("--format", "json");
   return args;
 }
 
@@ -389,10 +377,7 @@ function invocationAgentArgs(invocation, agent) {
   return invocation.acpxAgentCommand ? ["--agent", invocation.acpxAgentCommand] : [acpxAgentName(agent)];
 }
 
-/** Budget for one `acpx config show`; the single retry after a timeout gets three times this. */
-const VERIFY_CONFIG_TIMEOUT_MS = 10_000;
-
-async function verifyHarnessInvocation(invocation, cwd, { timeoutMs = VERIFY_CONFIG_TIMEOUT_MS } = {}) {
+async function verifyHarnessInvocation(invocation, cwd, { timeoutMs = undefined } = {}) {
   if (!invocation.requiredBuiltinAgent) return;
   const args = [...(cwd ? ["--cwd", cwd] : []), "config", "show", "--format", "json"];
   let result = await run(args, { timeoutMs, cwd, env: invocation.env });
@@ -467,7 +452,7 @@ export async function probeSession({
   sessionName,
   cwd = undefined,
   timeoutMs = 20_000,
-  createTimeoutMs = timeoutMs,
+  createTimeoutMs = undefined,
 }) {
   const acpxAgent = acpxAgentName(agent);
   const created = await run([acpxAgent, "sessions", "new", "--name", sessionName], {
@@ -522,11 +507,12 @@ export async function execOneShot({
   effort = null,
   promptFile,
   cwd,
-  timeoutSeconds = 300,
+  timeoutSeconds = undefined,
+  stallTimeoutSeconds = undefined,
   promptRetries = 1,
   approveReads = true,
   suppressReads = true,
-  verifyTimeoutMs = VERIFY_CONFIG_TIMEOUT_MS,
+  verifyTimeoutMs = undefined,
 }) {
   const invocation = prepareHarnessInvocation({ agent, model, effort });
   const args = [
@@ -549,7 +535,22 @@ export async function execOneShot({
       );
     }
     const execStartedAt = Date.now();
-    const result = await run(args, { timeoutMs: (timeoutSeconds + 30) * 1000, cwd, env: invocation.env });
+    const result = await captureModelActivity(
+      (activity) =>
+        run(args, {
+          ...activity,
+          captureStdout: false,
+          timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
+          cwd,
+          env: invocation.env,
+        }),
+      { promptFile, stallTimeoutSeconds, agent },
+    );
+    if (result.stalled)
+      throw new AcpxError(`acpx ${agent} stopped after ${stallTimeoutSeconds}s with no ACP activity`, {
+        ...result,
+        timedOut: true,
+      });
     if (result.spawnError && result.spawnError.code === "ENOENT") throw notFoundError(result);
     if (endedAtTimeout(result)) {
       throw new AcpxError(
@@ -575,7 +576,8 @@ export async function execOneShot({
     });
 
     const combined = `${result.stdout}\n${result.stderr}`;
-    const usage = parseTokenLine(combined) ?? recoverUsageFromStore({ agent, promptFile, cwd, startedAt });
+    const usage =
+      result.usage ?? parseTokenLine(combined) ?? recoverUsageFromStore({ agent, promptFile, cwd, startedAt });
     return {
       text: stripAcpxNoise(result.stdout),
       usage,
@@ -604,7 +606,7 @@ export async function execOneShot({
  * never as missing session support.
  *
  * @returns {Promise<{ notes: string[],
- *   prompt: (options: { promptFile: string, timeoutSeconds?: number, promptRetries?: number,
+ *   prompt: (options: { promptFile: string, timeoutSeconds?: number, stallTimeoutSeconds?: number, promptRetries?: number,
  *     approveReads?: boolean, approveAll?: boolean, suppressReads?: boolean }) =>
  *     Promise<{ text: string, usage: Record<string, number> | null, raw: string, stderr: string, notes: string[] }>,
  *   close: () => Promise<void> }>}
@@ -616,15 +618,17 @@ export async function openSession({
   sessionName,
   cwd,
   writeAccess = false,
-  createTimeoutMs = SESSION_CREATE_TIMEOUT_MS,
-  verifyTimeoutMs = VERIFY_CONFIG_TIMEOUT_MS,
+  createTimeoutMs = undefined,
+  verifyTimeoutMs = undefined,
 }) {
   const invocation = prepareHarnessInvocation({ agent, model, effort, writeAccess });
   const notes = [...invocation.notes];
   const acpxAgentArgs = invocationAgentArgs(invocation, agent);
-  // The adapter is already up once the session exists, so the later `set` calls do not
-  // need the cold-start budget `sessions new` gets.
-  const runOpts = { timeoutMs: 60_000, cwd, env: invocation.env };
+  // acpx 0.19.4 closes the creation client (queue-owner-runtime-C0wIYowh.js:5856-5865).
+  // `set` starts and loads a fresh adapter, not a warm one. The session CLI has no
+  // creation-time config overlay or keep-client option, so never impose a guessed
+  // setup budget. Upstream must fix the extra cold start for named sessions.
+  const runOpts = { cwd, env: invocation.env };
   /** @type {Awaited<ReturnType<typeof run>>} */
   let created;
   try {
@@ -676,7 +680,6 @@ export async function openSession({
     closed = true;
     try {
       const result = await run([...acpxAgentArgs, "sessions", "close", sessionName], {
-        timeoutMs: 30_000,
         cwd,
         env: invocation.env,
       });
@@ -725,7 +728,8 @@ export async function openSession({
 
   const prompt = async ({
     promptFile,
-    timeoutSeconds = 900,
+    timeoutSeconds = undefined,
+    stallTimeoutSeconds = undefined,
     promptRetries = 1,
     approveReads = true,
     approveAll = false,
@@ -748,7 +752,22 @@ export async function openSession({
       "--file",
       promptFile,
     ];
-    const result = await run(args, { timeoutMs: (timeoutSeconds + 30) * 1000, cwd, env: invocation.env });
+    const result = await captureModelActivity(
+      (activity) =>
+        run(args, {
+          ...activity,
+          captureStdout: false,
+          timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
+          cwd,
+          env: invocation.env,
+        }),
+      { promptFile, stallTimeoutSeconds, agent },
+    );
+    if (result.stalled)
+      throw new AcpxError(`acpx ${agent} stopped after ${stallTimeoutSeconds}s with no ACP activity`, {
+        ...result,
+        timedOut: true,
+      });
     if (endedAtTimeout(result)) {
       throw new AcpxError(
         timeoutMessage(
@@ -769,7 +788,7 @@ export async function openSession({
 
     const combined = `${result.stdout}\n${result.stderr}`;
     /** @type {Record<string, number> | null} */
-    let usage = parseTokenLine(combined);
+    let usage = result.usage ?? parseTokenLine(combined);
     if (!usage) {
       // The harness store holds the whole session's usage; this turn is the increase.
       const cumulative = recoverUsageFromStore({ agent, promptFile: firstPromptFile, cwd, startedAt });
@@ -804,11 +823,12 @@ export async function sessionPrompt({
   sessionName,
   promptFile,
   cwd,
-  timeoutSeconds = 900,
+  timeoutSeconds = undefined,
+  stallTimeoutSeconds = undefined,
   promptRetries = 1,
   approveReads = true,
   suppressReads = true,
-  createTimeoutMs = SESSION_CREATE_TIMEOUT_MS,
+  createTimeoutMs = undefined,
 }) {
   let session;
   try {
@@ -829,6 +849,7 @@ export async function sessionPrompt({
       promptFile,
       cwd,
       timeoutSeconds,
+      stallTimeoutSeconds,
       promptRetries,
       approveReads,
       suppressReads,
@@ -838,7 +859,14 @@ export async function sessionPrompt({
 
   const promptStartedAt = Date.now();
   try {
-    const result = await session.prompt({ promptFile, timeoutSeconds, promptRetries, approveReads, suppressReads });
+    const result = await session.prompt({
+      promptFile,
+      timeoutSeconds,
+      stallTimeoutSeconds,
+      promptRetries,
+      approveReads,
+      suppressReads,
+    });
     assertNotAcpxBudgetKill({
       agent,
       label: "session prompt",

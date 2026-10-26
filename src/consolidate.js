@@ -84,6 +84,7 @@ export async function consolidateGapLedger({ ledger, memoryPath, config, repo, m
         promptFile,
         cwd: modelCwd || repo.root,
         timeoutSeconds: config.timeoutSeconds,
+        stallTimeoutSeconds: config.stallTimeoutSeconds,
         promptRetries: config.promptRetries,
       };
       return runModelCall(call, pick, {

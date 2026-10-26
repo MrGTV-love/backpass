@@ -534,5 +534,8 @@ export function renderFrame(state, { width, theme, now, spin }) {
   if (panel === "analyze") lines.push(...analyzeDetail(frameState, theme, cols, spin));
   if (panel === "synthesize") lines.push(...synthesizeDetail(frameState, theme, cols, spin));
 
+  for (const call of Object.values(state.modelCalls || {})) {
+    lines.push(theme.paint(` ${call.agent}: no model activity for ${formatElapsed(now - call.lastActivityAt)}`, "dim"));
+  }
   return lines.map((line) => clipLine(line, cols).trimEnd());
 }

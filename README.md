@@ -821,9 +821,9 @@ role default `medium` for analysis is not sent to omp, while the role default `h
 set it: `--analysis-effort low` or `"analysis": { "effort": "low" }`.
 
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
-because its adapter accepts sessions while logged out). Session creation may wait up to three
-minutes for a cold-starting adapter; the remaining probe operations retain their shorter
-10-20 second limits. A potentially transient busy-harness miss retries once and is not cached;
+because its adapter accepts sessions while logged out). Session creation and invocation setup
+have no backpass wall-clock cap, including cold adapter startup; the remaining availability
+probe operations retain their shorter 10-20 second limits. A potentially transient busy-harness miss retries once and is not cached;
 durable verdicts are cached in
 `.backpass/agent-probe-cache.json` for 12h (30min for negatives). Pi and OpenCode entries
 are re-probed when their credential or auth-file state changes; `--force` re-probes every
@@ -831,6 +831,18 @@ entry. The probe is a filter, not a promise: if the chosen harness answers `AUTH
 rejects the model, or returns a clean exit with no output at all (a provider account out
 of quota or credits, often swallowed before it reaches stderr) mid-run, backpass falls
 through to the next candidate and says so.
+Model turns have **no default wall-clock or stall cap**. Set `timeoutSeconds` to a positive
+number for an explicit user wall-clock cap, or `stallTimeoutSeconds` for an explicit cap on
+silence between ACP JSON events (both default to `null`, disabled). Silent reasoning is not
+proof of a stall: the live view reports `no model activity for <duration>` without stopping
+work. acpx's own configured timeouts can still end a call.
+
+Each prompt writes a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
+event count, longest activity gap and a base-2 millisecond gap histogram. Gaps include startup
+and final silence. This contains timings, not prompt, thought or tool content. No measured
+idle/loaded silence bound exists yet; these artifacts calibrate any future default stall rule.
+JSON output streams ACP activity immediately, unlike acpx quiet output which buffers the reply.
+
 Model-turn timeouts never fall through, whether enforced by backpass or reported by acpx itself; in analysis, only that transcript fails and is retried next run, including with a pinned agent.
 A clean blank exit that consumed nearly the whole `--timeout` budget is also treated as a timeout, for compatibility with older acpx versions.
 When a whole ladder is exhausted the error lists every candidate with what to run to fix it.
