@@ -1,6 +1,6 @@
 import { UserError, color, info, warn } from "./logger.js";
 import { DEFAULT_EFFORT, LEGACY_DEFAULT_AGENTS } from "./config.js";
-import { AcpxError, acpxVersion, classifyAcpxFailure, probeSession } from "./acpx.js";
+import { AcpxError, PROBE_CREATE_TIMEOUT_MS, acpxVersion, classifyAcpxFailure, probeSession } from "./acpx.js";
 import { ambiguousModelDetail, providerAuthState, rankCollidingIds, readProviderAuthTypes } from "./provider-auth.js";
 import { OMP_THINKING_LEVELS } from "./harness-invoke.js";
 import { runCapture } from "./subprocess.js";
@@ -202,7 +202,7 @@ export async function probeCandidate(candidate, options = {}) {
     sessionName,
     cwd,
     timeoutMs: PROBE_TIMEOUT_BY_AGENT[agent] || PROBE_TIMEOUT_MS,
-    createTimeoutMs: undefined,
+    createTimeoutMs: PROBE_CREATE_TIMEOUT_MS,
   });
   if (result.verdict !== "ok") {
     return {

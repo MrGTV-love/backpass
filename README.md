@@ -821,9 +821,10 @@ role default `medium` for analysis is not sent to omp, while the role default `h
 set it: `--analysis-effort low` or `"analysis": { "effort": "low" }`.
 
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
-because its adapter accepts sessions while logged out). Session creation and invocation setup
-have no backpass wall-clock cap, including cold adapter startup; the remaining availability
-probe operations retain their shorter 10-20 second limits. A potentially transient busy-harness miss retries once and is not cached;
+because its adapter accepts sessions while logged out). The probe's session creation may wait up
+to three minutes for a cold-starting adapter; the remaining probe operations retain their shorter
+10-20 second limits. A working call's session creation and invocation setup (`config show`,
+`sessions new`, `set`) have no backpass wall-clock cap. A potentially transient busy-harness miss retries once and is not cached;
 durable verdicts are cached in
 `.backpass/agent-probe-cache.json` for 12h (30min for negatives). Pi and OpenCode entries
 are re-probed when their credential or auth-file state changes; `--force` re-probes every
@@ -832,16 +833,20 @@ rejects the model, or returns a clean exit with no output at all (a provider acc
 of quota or credits, often swallowed before it reaches stderr) mid-run, backpass falls
 through to the next candidate and says so.
 Model turns have **no default wall-clock or stall cap**. Set `timeoutSeconds` to a positive
-number for an explicit user wall-clock cap, or `stallTimeoutSeconds` for an explicit cap on
-silence between ACP JSON events (both default to `null`, disabled). Silent reasoning is not
-proof of a stall: the live view reports `no model activity for <duration>` without stopping
-work. acpx's own configured timeouts can still end a call. Ctrl-C or SIGTERM cancels active
-ACP process groups and closes named sessions before backpass exits, including in the live view.
-If a session is already closing, interruption waits for that cleanup rather than aborting it.
+number for an explicit user wall-clock cap on each per-transcript analysis turn (and on gap
+consolidation); synthesis turns never get a wall-clock cap. Set `stallTimeoutSeconds` for an
+explicit cap on silence between ACP JSON events on any model turn (both default to `null`,
+disabled). Silent reasoning is not proof of a stall: once a call has been silent for a minute,
+the live view reports `no model activity for <duration>` without stopping work. acpx's own
+configured timeouts can still end a call. Ctrl-C or SIGTERM cancels active ACP process groups
+and closes named sessions before backpass exits, including in the live view. If a session is
+already closing, interruption waits for that cleanup rather than aborting it; a second Ctrl-C or
+SIGTERM exits at once and can leave an acpx session owner running.
 
 Each prompt writes a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
-event count, longest activity gap and a base-2 millisecond gap histogram. Gaps include startup
-and final silence. This contains timings, not prompt, thought or tool content. No measured
+event count, longest activity gap and a base-2 millisecond gap histogram. Session setup calls
+(`config show`, `sessions new`, `set`) add their own records, named by `step`, to the artifact of
+the prompt they prepare. Gaps include startup and final silence. This contains timings, not prompt, thought or tool content. No measured
 idle/loaded silence bound exists yet; these artifacts calibrate any future default stall rule.
 JSON output streams ACP activity immediately, unlike acpx quiet output which buffers the reply.
 

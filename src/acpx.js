@@ -3,7 +3,12 @@ import fs from "node:fs";
 import { UserError, warn } from "./logger.js";
 import { runCapture } from "./subprocess.js";
 import { captureModelActivity } from "./model-activity.js";
-import { cancelModelCalls, isCancellingModelCalls, registerModelCleanup } from "./model-cancellation.js";
+import {
+  cancelModelCalls,
+  isCancellingModelCalls,
+  registerModelCleanup,
+  registerSessionCleanup,
+} from "./model-cancellation.js";
 import { prepareHarnessInvocation } from "./harness-invoke.js";
 import * as piStore from "./discovery/adapters/pi.js";
 import { readJsonl } from "./discovery/adapters/shared.js";
@@ -71,7 +76,8 @@ export class AcpxError extends Error {
     this.unsupported = false;
     /** Set when the call exited clean but produced no usable text - see `assertNonEmptyOutput`. */
     this.emptyOutput = emptyOutput;
-    /** "verify" when the adapter-configuration check timed out, before any prompt ran. */
+    /** "verify" when the adapter-configuration check timed out, before any prompt ran;
+     * "stall" when the explicit `stallTimeoutSeconds` cap stopped a silent turn. */
     this.stage = stage;
   }
 }
@@ -91,7 +97,10 @@ export class AcpxError extends Error {
  */
 async function run(args, options = {}) {
   const { cleanup = false, ...captureOptions } = options;
-  if (isCancellingModelCalls() && !cleanup) throw new AcpxError("backpass interrupted");
+  if (isCancellingModelCalls() && !cleanup) {
+    await cancelModelCalls();
+    throw new AcpxError("backpass interrupted");
+  }
   const controller = new AbortController();
   const { promise: completed, resolve: finish } = /** @type {PromiseWithResolvers<void>} */ (Promise.withResolvers());
   let result;
@@ -399,15 +408,21 @@ function invocationAgentArgs(invocation, agent) {
   return invocation.acpxAgentCommand ? ["--agent", invocation.acpxAgentCommand] : [acpxAgentName(agent)];
 }
 
-async function verifyHarnessInvocation(invocation, cwd, { timeoutMs = undefined } = {}) {
+/** Working-session setup is recorded and shown like a model turn, but never capped. */
+function runSetup(args, options, { agent, promptFile, step }) {
+  return captureModelActivity((activity) => run(args, { ...options, ...activity }), { promptFile, agent, step });
+}
+
+async function verifyHarnessInvocation(invocation, cwd, { timeoutMs = undefined, promptFile = null } = {}) {
   if (!invocation.requiredBuiltinAgent) return;
   const args = [...(cwd ? ["--cwd", cwd] : []), "config", "show", "--format", "json"];
-  let result = await run(args, { timeoutMs, cwd, env: invocation.env });
+  const activity = { agent: invocation.requiredBuiltinAgent, promptFile, step: "config show" };
+  let result = await runSetup(args, { timeoutMs, cwd, env: invocation.env }, activity);
   // A timed-out `config show` says nothing about the adapter map: on a loaded host node can
   // take longer than the budget just to start. Retry once with a wider budget; if it still
   // times out, fail this call (the analysis stage records it and a later run retries it)
   // rather than raise a UserError, which stops the whole run with advice that cannot help.
-  if (result.timedOut) result = await run(args, { timeoutMs: timeoutMs * 3, cwd, env: invocation.env });
+  if (result.timedOut) result = await runSetup(args, { timeoutMs: timeoutMs * 3, cwd, env: invocation.env }, activity);
   if (result.timedOut) {
     throw new AcpxError(
       `acpx config show timed out verifying the ${invocation.requiredBuiltinAgent} adapter configuration`,
@@ -461,10 +476,28 @@ export async function acpxVersion({ timeoutMs = 10_000 } = {}) {
 }
 
 /**
+ * How long the availability probe's `acpx <agent> sessions new` may take before backpass
+ * kills it and the ladder moves to the next candidate. Only this zero-token probe uses
+ * it; a working session's creation has no backpass cap (`openSession`).
+ *
+ * acpx spawns most built-in ACP adapters through an npm package-exec bridge
+ * (`acpx --verbose` prints it: `npm exec --yes --package=@agentclientprotocol/codex-acp@...`,
+ * `npx pi-acp@...`), so session create can include a cold package install before the
+ * adapter process exists at all. The codex adapter alone pulls a ~270MB platform binary,
+ * which no 60s budget can cover on a first run; npm also performs a registry
+ * security-advisory round-trip per spawn, which stalls session create when that endpoint
+ * is slow. An agent acpx launches as a local binary (grok) never pays either cost.
+ */
+export const PROBE_CREATE_TIMEOUT_MS = 180_000;
+
+/**
  * Zero-token availability probe: spawn the adapter, handshake, create a session,
  * read what it advertises, close it. For codex / pi / grok, `sessions new` is a
  * real auth gate (ACP -32000); for claude it is not, which is why `src/agents.js`
  * checks `claude auth status` before ever calling this.
+ *
+ * The close is registered before `sessions new`: an interrupted create may already
+ * have started acpx's detached queue owner, which only `sessions close` stops.
  *
  * @returns {Promise<{ verdict: "ok" | "unauthenticated" | "model-unavailable" | "unreachable" | "timeout" | "empty-output",
  *   detail: string, availableModels: string[], transient?: boolean }>}
@@ -474,32 +507,45 @@ export async function probeSession({
   sessionName,
   cwd = undefined,
   timeoutMs = 20_000,
-  createTimeoutMs = undefined,
+  createTimeoutMs = timeoutMs,
 }) {
   const acpxAgent = acpxAgentName(agent);
-  const created = await run([acpxAgent, "sessions", "new", "--name", sessionName], {
-    timeoutMs: createTimeoutMs,
-    cwd,
-  });
-  if (created.spawnError?.code === "ENOENT") throw notFoundError(created);
-  if (endedAtTimeout(created)) {
-    return {
-      verdict: "timeout",
-      detail: timeoutMessage(created, agent, "probe", `probe timed out after ${Math.round(createTimeoutMs / 1000)}s`),
-      availableModels: [],
-    };
-  }
-  if (created.code !== 0) {
-    const classified = classifyAcpxFailure(created);
-    return {
-      verdict: classified || "unreachable",
-      detail: firstLine(created.stderr) || `exit ${created.code}`,
-      availableModels: [],
-      ...(!classified ? { transient: true } : {}),
-    };
-  }
-
+  /** @type {Promise<void> | null} */
+  let closePromise = null;
+  const close = () => {
+    closePromise ??= run([acpxAgent, "sessions", "close", sessionName], { cleanup: true, timeoutMs, cwd })
+      .then((closed) => {
+        if (closed.code !== 0) warn(`could not close acpx probe session ${sessionName}`);
+      })
+      .finally(() => unregister());
+    return closePromise;
+  };
+  const unregister = registerSessionCleanup(close);
+  let opened = false;
   try {
+    const created = await run([acpxAgent, "sessions", "new", "--name", sessionName], {
+      timeoutMs: createTimeoutMs,
+      cwd,
+    });
+    if (created.spawnError?.code === "ENOENT") throw notFoundError(created);
+    if (endedAtTimeout(created)) {
+      return {
+        verdict: "timeout",
+        detail: timeoutMessage(created, agent, "probe", `probe timed out after ${Math.round(createTimeoutMs / 1000)}s`),
+        availableModels: [],
+      };
+    }
+    if (created.code !== 0) {
+      const classified = classifyAcpxFailure(created);
+      return {
+        verdict: classified || "unreachable",
+        detail: firstLine(created.stderr) || `exit ${created.code}`,
+        availableModels: [],
+        ...(!classified ? { transient: true } : {}),
+      };
+    }
+    opened = true;
+
     const status = await run(["--format", "json", acpxAgent, "status", "-s", sessionName], { timeoutMs, cwd });
     let availableModels = [];
     if (status.code === 0) {
@@ -512,8 +558,8 @@ export async function probeSession({
     }
     return { verdict: "ok", detail: "", availableModels };
   } finally {
-    const closed = await run([acpxAgent, "sessions", "close", sessionName], { timeoutMs, cwd });
-    if (closed.code !== 0) warn(`could not close acpx probe session ${sessionName}`);
+    if (opened) await close();
+    else unregister();
   }
 }
 
@@ -549,7 +595,7 @@ export async function execOneShot({
 
   const startedAt = Date.now();
   try {
-    await verifyHarnessInvocation(invocation, cwd, { timeoutMs: verifyTimeoutMs });
+    await verifyHarnessInvocation(invocation, cwd, { timeoutMs: verifyTimeoutMs, promptFile });
     if (effort && invocation.setEffortKey) {
       throw new UserError(
         `${agent} cannot apply invocation-scoped effort=${effort} in an exec one-shot`,
@@ -572,6 +618,7 @@ export async function execOneShot({
       throw new AcpxError(`acpx ${agent} stopped after ${stallTimeoutSeconds}s with no ACP activity`, {
         ...result,
         timedOut: true,
+        stage: "stall",
       });
     if (result.spawnError && result.spawnError.code === "ENOENT") throw notFoundError(result);
     if (endedAtTimeout(result)) {
@@ -642,6 +689,7 @@ export async function openSession({
   writeAccess = false,
   createTimeoutMs = undefined,
   verifyTimeoutMs = undefined,
+  promptFile = null,
 }) {
   const invocation = prepareHarnessInvocation({ agent, model, effort, writeAccess });
   const notes = [...invocation.notes];
@@ -651,53 +699,9 @@ export async function openSession({
   // creation-time config overlay or keep-client option, so never impose a guessed
   // setup budget. Upstream must fix the extra cold start for named sessions.
   const runOpts = { cwd, env: invocation.env };
-  /** @type {Awaited<ReturnType<typeof run>>} */
-  let created;
-  try {
-    await verifyHarnessInvocation(invocation, cwd, { timeoutMs: verifyTimeoutMs });
-    created = await run(
-      [
-        ...(invocation.acpxModel ? ["--model", invocation.acpxModel] : []),
-        ...acpxAgentArgs,
-        "sessions",
-        "new",
-        "--name",
-        sessionName,
-      ],
-      { ...runOpts, timeoutMs: createTimeoutMs },
-    );
-  } catch (err) {
-    invocation.dispose();
-    throw err;
-  }
-  if (created.spawnError && created.spawnError.code === "ENOENT") {
-    invocation.dispose();
-    throw notFoundError(created);
-  }
-  if (endedAtTimeout(created)) {
-    invocation.dispose();
-    throw sessionCreateTimeoutError({ agent, acpxAgentArgs, timeoutMs: createTimeoutMs, result: created });
-  }
-  if (created.code !== 0) {
-    invocation.dispose();
-    // An auth or spawn failure must surface as such so the caller can fall through.
-    if (classifyAcpxFailure(created)) {
-      throw new AcpxError(`acpx ${agent} session create failed: ${firstLine(created.stderr)}`, created);
-    }
-    const err = new AcpxError(
-      `acpx ${agent} has no session support: ${firstLine(created.stderr) || `exit ${created.code}`}`,
-      created,
-    );
-    err.unsupported = true;
-    throw err;
-  }
-
-  const startedAt = Date.now();
+  const setup = (step) => ({ agent, promptFile, step });
   /** @type {Promise<void> | null} */
   let closePromise = null;
-  let firstPromptFile = null;
-  let storeUsageSeen = null;
-
   const close = () => {
     if (!closePromise) {
       closePromise = (async () => {
@@ -716,13 +720,72 @@ export async function openSession({
     }
     return closePromise;
   };
+  try {
+    await verifyHarnessInvocation(invocation, cwd, { timeoutMs: verifyTimeoutMs, promptFile });
+  } catch (err) {
+    invocation.dispose();
+    throw err;
+  }
   // acpx's named-session queue owner is outside the prompt CLI's process group.
   // sessions close stops that owner (acpx 0.19.4 queue-owner-runtime:5700-5722).
-  const unregisterSession = registerModelCleanup(close);
+  // Register before creation: an interrupted `sessions new` may already have started it.
+  const unregisterSession = registerSessionCleanup(close);
+  const abandon = () => {
+    unregisterSession();
+    invocation.dispose();
+  };
+  /** @type {Awaited<ReturnType<typeof run>>} */
+  let created;
+  try {
+    created = await runSetup(
+      [
+        ...(invocation.acpxModel ? ["--model", invocation.acpxModel] : []),
+        ...acpxAgentArgs,
+        "sessions",
+        "new",
+        "--name",
+        sessionName,
+      ],
+      { ...runOpts, timeoutMs: createTimeoutMs },
+      setup("sessions new"),
+    );
+  } catch (err) {
+    abandon();
+    throw err;
+  }
+  if (created.spawnError && created.spawnError.code === "ENOENT") {
+    abandon();
+    throw notFoundError(created);
+  }
+  if (endedAtTimeout(created)) {
+    abandon();
+    throw sessionCreateTimeoutError({ agent, acpxAgentArgs, timeoutMs: createTimeoutMs, result: created });
+  }
+  if (created.code !== 0) {
+    abandon();
+    // An auth or spawn failure must surface as such so the caller can fall through.
+    if (classifyAcpxFailure(created)) {
+      throw new AcpxError(`acpx ${agent} session create failed: ${firstLine(created.stderr)}`, created);
+    }
+    const err = new AcpxError(
+      `acpx ${agent} has no session support: ${firstLine(created.stderr) || `exit ${created.code}`}`,
+      created,
+    );
+    err.unsupported = true;
+    throw err;
+  }
+
+  const startedAt = Date.now();
+  let firstPromptFile = null;
+  let storeUsageSeen = null;
 
   try {
     if (invocation.sessionMode) {
-      const setMode = await run([...acpxAgentArgs, "-s", sessionName, "set-mode", invocation.sessionMode], runOpts);
+      const setMode = await runSetup(
+        [...acpxAgentArgs, "-s", sessionName, "set-mode", invocation.sessionMode],
+        runOpts,
+        setup("set-mode"),
+      );
       if (setMode.code !== 0) {
         // Same degradation as session create: backpass kills the call, acpx exits 130 with
         // no stderr, and `exit 130` would read as the harness rejecting the mode.
@@ -740,7 +803,11 @@ export async function openSession({
       }
     }
     if (effort && invocation.setEffortKey) {
-      const set = await run([...acpxAgentArgs, "-s", sessionName, "set", invocation.setEffortKey, effort], runOpts);
+      const set = await runSetup(
+        [...acpxAgentArgs, "-s", sessionName, "set", invocation.setEffortKey, effort],
+        runOpts,
+        setup(`set ${invocation.setEffortKey}`),
+      );
       if (set.code !== 0) {
         // Same degradation as session create: a killed call exits 130 with no stderr, and
         // `exit 130` would read as the adapter refusing the effort key.
@@ -798,6 +865,7 @@ export async function openSession({
       throw new AcpxError(`acpx ${agent} stopped after ${stallTimeoutSeconds}s with no ACP activity`, {
         ...result,
         timedOut: true,
+        stage: "stall",
       });
     if (endedAtTimeout(result)) {
       throw new AcpxError(
@@ -863,7 +931,7 @@ export async function sessionPrompt({
 }) {
   let session;
   try {
-    session = await openSession({ agent, model, effort, sessionName, cwd, createTimeoutMs });
+    session = await openSession({ agent, model, effort, sessionName, cwd, createTimeoutMs, promptFile });
   } catch (err) {
     if (!(err instanceof AcpxError) || !err.unsupported) throw err;
     if (effort && effortOptionKey(agent)) {

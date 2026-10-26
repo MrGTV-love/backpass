@@ -172,3 +172,19 @@ test("stream decodes split UTF-8 and excludes thoughts, tools and prompts from a
   assert.equal(result.stdout, "café");
   assert.deepEqual(result.usage, { input: 3, output: 4, total: 7 });
 });
+
+test("the live silence notice waits a minute of silence and names the setup step", (t) => {
+  t.after(clearProgressSink);
+  const state = initialState({});
+  const theme = makeTheme({ depth: 0 });
+  const notices = (now) =>
+    renderFrame(state, { width: 110, theme, now, spin: "." }).filter((line) => line.includes("no model activity"));
+  reduceEvent(state, "model:activity", { id: "a", agent: "codex", step: null, lastActivityAt: 1000 });
+  reduceEvent(state, "model:activity", { id: "b", agent: "codex", step: "set reasoning_effort", lastActivityAt: 1000 });
+  assert.deepEqual(notices(1000), [], "no notice while events arrive");
+  assert.deepEqual(notices(60_999), []);
+  assert.deepEqual(notices(61_000), [
+    " codex: no model activity for 1:00",
+    " codex set reasoning_effort: no model activity for 1:00",
+  ]);
+});

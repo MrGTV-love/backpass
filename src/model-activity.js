@@ -10,8 +10,15 @@ import { emitProgress } from "./progress.js";
  * Events are activity, not a heartbeat: silent reasoning need not emit anything.
  * No measured idle/loaded silence bound exists yet. Default termination is disabled;
  * the per-prompt *.activity.jsonl histogram supplies calibration for a future bound.
+ *
+ * A session setup `step` (config show, sessions new, set) emits no ACP stream: it is
+ * timed and shown live, and its structured stdout is returned untouched. Its record
+ * lands beside the prompt it prepares; with no prompt file it is shown live only.
  */
-export async function captureModelActivity(capture, { promptFile, stallTimeoutSeconds = undefined, agent }) {
+export async function captureModelActivity(
+  capture,
+  { promptFile, stallTimeoutSeconds = undefined, agent, step = null },
+) {
   const controller = new AbortController();
   const startedAt = Date.now();
   const start = performance.now();
@@ -29,9 +36,10 @@ export async function captureModelActivity(capture, { promptFile, stallTimeoutSe
   let errors = "";
   let usage = null;
   const decoder = new StringDecoder("utf8");
-  const id = `${promptFile}:${process.pid}:${start}`;
-  const artifact = `${promptFile}.activity.jsonl`;
-  const record = (value) => fs.appendFileSync(artifact, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  const id = `${promptFile ?? step}:${process.pid}:${start}`;
+  const record = (value) => {
+    if (promptFile) fs.appendFileSync(`${promptFile}.activity.jsonl`, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  };
   const gap = (now) => {
     const ms = Math.max(0, now - last);
     longestGapMs = Math.max(longestGapMs, ms);
@@ -64,7 +72,7 @@ export async function captureModelActivity(capture, { promptFile, stallTimeoutSe
     gap(performance.now());
     eventCount += 1;
     lastActivityAt = Date.now();
-    emitProgress("model:activity", { id, agent, lastActivityAt });
+    emitProgress("model:activity", { id, agent, step, lastActivityAt });
     arm();
     const update = message.params?.update;
     if (
@@ -109,10 +117,11 @@ export async function captureModelActivity(capture, { promptFile, stallTimeoutSe
       if (value.trim()) line(value);
     }
   };
-  record({ type: "start", id, agent, startedAt, stallTimeoutSeconds: stallTimeoutSeconds ?? null });
-  emitProgress("model:activity", { id, agent, lastActivityAt });
+  record({ type: "start", id, agent, step, startedAt, stallTimeoutSeconds: stallTimeoutSeconds ?? null });
+  emitProgress("model:activity", { id, agent, step, lastActivityAt });
   arm();
   try {
+    if (step) return { ...(await capture({ signal: controller.signal })), stalled };
     const result = await capture({
       signal: controller.signal,
       onStdout(chunk) {
@@ -137,6 +146,7 @@ export async function captureModelActivity(capture, { promptFile, stallTimeoutSe
     record({
       type: "end",
       id,
+      step,
       startedAt,
       endedAt: Date.now(),
       eventCount,

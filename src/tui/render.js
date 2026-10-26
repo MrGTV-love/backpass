@@ -25,6 +25,9 @@ export function spinnerFrame(now) {
 
 const MAX_WIDTH = 110;
 
+/** Display-only: when a silent model call is worth naming. It never cancels anything. */
+const SILENCE_NOTICE_MS = 60_000;
+
 const HARNESS_HUES = {
   claude: "peach",
   codex: "green",
@@ -535,7 +538,10 @@ export function renderFrame(state, { width, theme, now, spin }) {
   if (panel === "synthesize") lines.push(...synthesizeDetail(frameState, theme, cols, spin));
 
   for (const call of Object.values(state.modelCalls || {})) {
-    lines.push(theme.paint(` ${call.agent}: no model activity for ${formatElapsed(now - call.lastActivityAt)}`, "dim"));
+    const silentMs = now - call.lastActivityAt;
+    if (silentMs < SILENCE_NOTICE_MS) continue;
+    const label = call.step ? `${call.agent} ${call.step}` : call.agent;
+    lines.push(theme.paint(` ${label}: no model activity for ${formatElapsed(silentMs)}`, "dim"));
   }
   return lines.map((line) => clipLine(line, cols).trimEnd());
 }

@@ -126,7 +126,7 @@ export const DEFAULT_CONFIG = {
     includeCursorIde: false,
   },
   jobs: 4,
-  /** Explicit user wall-clock cap only; null never kills a working model turn. */
+  /** Explicit user wall-clock cap on analysis turns only, never synthesis; null never kills a working model turn. */
   timeoutSeconds: null,
   /** No measured idle/loaded silence bound yet; *.activity.jsonl calibrates a future default. */
   stallTimeoutSeconds: null,
