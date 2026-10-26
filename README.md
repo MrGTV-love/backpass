@@ -531,8 +531,11 @@ or the intervening history is incomplete after expiry or rewriting, the run refu
 with that reason rather than guessing which moves are safe. A reflog record written
 without a message is still followed, but it never counts as a fast-forward. Symlinks
 are followed as each move's old and new commits record them, so a file a pointer only
-reached between two moves still counts. A fingerprinted file such a fast-forward changed
-(its content, or a committed retarget of a pointer such as `CLAUDE.md` -> `AGENTS.md`)
+reached between two moves still counts. Every path visited on those chains must also be
+clean at the final check, including a target no longer reached by the current pointer;
+an uncommitted edit to an intermediate target still refuses. A fingerprinted file such a
+fast-forward changed (its content, or a committed retarget of a pointer such as
+`CLAUDE.md` -> `AGENTS.md`)
 does not discard the proposal when Git reports it, and every symlink on the way to it,
 clean before and after the run; an uncommitted retarget of the link still refuses. Any
 other change to a fingerprinted file still refuses the run and names it, including a

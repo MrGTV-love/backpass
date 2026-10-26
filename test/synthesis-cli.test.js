@@ -511,6 +511,42 @@ test("a checkout that edits an intermediate CLAUDE.md target between retargeting
   assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
 });
 
+test("an uncommitted edit to an intermediate CLAUDE.md target between retargeting fast-forwards still refuses", () => {
+  const dir = makeCliRepo({
+    memory: MEMORY,
+    files: { "B.md": `${MEMORY}\n- B.\n`, "C.md": `${MEMORY}\n- C.\n` },
+    links: { "CLAUDE.md": "AGENTS.md" },
+  });
+  const {
+    clone,
+    commits: [toB, toC],
+  } = upstreamHistory(dir, [{ links: { "CLAUDE.md": "B.md" } }, { links: { "CLAUDE.md": "C.md" } }]);
+  const patchDir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-dirty-intermediate-"));
+  const patch = path.join(patchDir, "edit.patch");
+  fs.writeFileSync(path.join(clone, "B.md"), `${MEMORY}\n- B, uncommitted harness edit.\n`);
+  fs.writeFileSync(patch, execFileSync("git", ["diff", "--", "B.md"], { cwd: clone, encoding: "utf8" }));
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: EDIT_TURN,
+      repoGit: [
+        ["fetch", "-q", clone, "main"],
+        ["merge", "--ff-only", toB],
+        ["apply", patch],
+        ["merge", "--ff-only", toC],
+      ].map((args) => ({ cwd: dir, args })),
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  fs.rmSync(patchDir, { recursive: true, force: true });
+  assert.equal(gitIn(dir, ["rev-parse", "HEAD"]), toC, run.output);
+  assert.equal(fs.readlinkSync(path.join(dir, "CLAUDE.md")), "C.md");
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "CLAUDE.md", "AGENTS.md", "C.md"]), "");
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "B.md"]), "M B.md");
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("CLAUDE.md changed in the repository during synthesis"), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+});
+
 test("message-less reflog records are traversed, and a fast-forward around them is still excused", () => {
   const skillPath = ".agents/skills/build/SKILL.md";
   const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";

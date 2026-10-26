@@ -340,14 +340,16 @@ const REFLOG_UNAVAILABLE =
  * since a harness's own commit, checkout, reset, or rebase looks the same as anyone else's.
  * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
  * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
- * Returns the fingerprinted paths fast-forwards changed, a reason when the synthesis-start
- * boundary is unavailable, or null for other unsafe moves.
+ * Returns the fingerprinted paths fast-forwards changed and all visited chain paths for
+ * the final cleanliness check, a reason when the synthesis-start boundary is unavailable,
+ * or null for other unsafe moves.
  */
 function fastForwardFiles(git, paths) {
-  if (!paths.length) return { files: new Set() };
+  if (!paths.length) return { files: new Set(), visitedPaths: new Set() };
   try {
     const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
     const files = new Set();
+    const visitedPaths = new Set(paths);
     let expected = head;
     let unsafe = false;
     const trees = new Map();
@@ -363,10 +365,11 @@ function fastForwardFiles(git, paths) {
       if (record === git.startRecord) {
         if (to !== git.head) return { reason: REFLOG_UNAVAILABLE };
         if (synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim() !== head) return null;
-        return unsafe ? null : { files };
+        return unsafe ? null : { files, visitedPaths };
       }
       if (!unsafe && from !== to) {
         const moved = new Set([...paths, ...chainPaths(from), ...chainPaths(to)]);
+        for (const file of moved) visitedPaths.add(file);
         const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...moved])
           .split("\0")
           .filter(Boolean);
@@ -391,8 +394,8 @@ function fastForwardFiles(git, paths) {
 /**
  * The changed fingerprinted files a clean fast-forward fully explains: a fast-forward changed
  * a path on its resolution chain (the file or a link retargeted upstream), no other kind of
- * move touched any chain, and every path on its chain, then and now, is clean at both ends,
- * so neither the file nor any link to it was edited directly.
+ * move touched any chain, its starting chain was clean, and every path visited on any
+ * chain is clean now, including intermediate targets the current pointer no longer reaches.
  */
 function explainedByFastForward(repo, git, changed) {
   if (!git || !changed.length) return { files: new Set() };
@@ -410,8 +413,8 @@ function explainedByFastForward(repo, git, changed) {
         paths(file).some((relative) => advanced.files.has(relative)) &&
         !git.chains[file].some((relative) => git.dirty.includes(relative)),
     );
-    const dirty = dirtyPaths(git.root, [...new Set(named.flatMap(paths))]);
-    return { files: new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative)))) };
+    const dirty = dirtyPaths(git.root, [...advanced.visitedPaths]);
+    return { files: new Set(dirty.length ? [] : named) };
   } catch {
     return { files: new Set() };
   }
