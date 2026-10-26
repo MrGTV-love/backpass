@@ -7,7 +7,7 @@ import { renderPrompt } from "./prompts.js";
 import { warn } from "./logger.js";
 
 /**
- * Pre-synthesis gap consolidation: one bounded model call that sees the full open gap
+ * Pre-synthesis gap consolidation: one model call that sees the full open gap
  * set for the memory file and merges entries that are paraphrases of one gap.
  *
  * This is the second half of gap identity. The first half - the analysis turn citing an
@@ -83,7 +83,7 @@ export async function consolidateGapLedger({ ledger, memoryPath, config, repo, m
         model: pick.model,
         promptFile,
         cwd: modelCwd || repo.root,
-        timeoutSeconds: config.timeoutSeconds,
+        // This turn combines transcripts; timeoutSeconds caps only their individual analysis.
         stallTimeoutSeconds: config.stallTimeoutSeconds,
         promptRetries: config.promptRetries,
       };

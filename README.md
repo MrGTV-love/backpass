@@ -833,8 +833,8 @@ rejects the model, or returns a clean exit with no output at all (a provider acc
 of quota or credits, often swallowed before it reaches stderr) mid-run, backpass falls
 through to the next candidate and says so.
 Model turns have **no default wall-clock or stall cap**. Set `timeoutSeconds` to a positive
-number for an explicit user wall-clock cap on each per-transcript analysis turn (and on gap
-consolidation); synthesis turns never get a wall-clock cap. Set `stallTimeoutSeconds` for an
+number for an explicit user wall-clock cap only on each per-transcript analysis turn.
+Cross-transcript gap consolidation and synthesis turns never get a backpass wall-clock cap. Set `stallTimeoutSeconds` for an
 explicit cap on silence between ACP JSON events on any model turn (both default to `null`,
 disabled). Silent reasoning is not proof of a stall: once a call has been silent for a minute,
 the live view reports `no model activity for <duration>` without stopping work. acpx's own

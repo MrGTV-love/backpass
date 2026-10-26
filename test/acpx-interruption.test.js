@@ -18,6 +18,7 @@ function fixture(mode) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-interrupt-"));
   const files = {
     owner: path.join(dir, "owner.pid"),
+    closePid: path.join(dir, "close.pid"),
     closed: path.join(dir, "closed"),
     release: path.join(dir, "release-close"),
     running: path.join(dir, "prompt-running"),
@@ -42,6 +43,7 @@ if (args.includes('sessions') && args.includes('new')) {
   if (mode === 'probe-create') hang();
   else process.exit(0);
 } else if (args.includes('sessions') && args.includes('close')) {
+  fs.writeFileSync(files.closePid, String(process.pid));
   if (fs.existsSync(files.owner)) {
     try { process.kill(Number(fs.readFileSync(files.owner, 'utf8')), 'SIGKILL'); } catch {}
   }
@@ -147,13 +149,22 @@ test("a second signal exits while a session close is still waiting on acpx", pos
     assert.equal(result.code, 143, result.stderr);
   } finally {
     child.kill("SIGKILL");
-    if (fs.existsSync(env.files.owner)) {
+    const fixturePids = [env.files.owner, env.files.closePid]
+      .filter((file) => fs.existsSync(file))
+      .map((file) => Number(fs.readFileSync(file, "utf8")));
+    for (const pid of fixturePids) {
       try {
-        process.kill(Number(fs.readFileSync(env.files.owner, "utf8")), "SIGKILL");
-      } catch {
-        // Already stopped.
+        // The second signal deliberately bypasses product cleanup. The fixture
+        // owns both detached groups and must reap them even when an assertion fails.
+        process.kill(-pid, "SIGKILL");
+      } catch (error) {
+        assert.equal(error.code, "ESRCH", `could not stop fixture group ${pid}: ${error.message}`);
       }
     }
+    await exited;
+    while (fixturePids.some(alive)) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(alive(child.pid), false, "the backpass fixture process survived teardown");
+    for (const pid of fixturePids) assert.equal(alive(pid), false, `fixture process ${pid} survived teardown`);
     fs.rmSync(env.dir, { recursive: true, force: true });
   }
 });
