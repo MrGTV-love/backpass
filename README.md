@@ -522,11 +522,13 @@ past the staging copy into the repo is an error, never an apply.
 Only the fingerprinted memory and skill files are checked; edits, commits, and new files
 elsewhere in the checkout are left alone. A HEAD move during synthesis, fast-forward or
 not, matters only if it changes a fingerprinted path or a symlink on the way to one. Each
-HEAD reflog entry since the run started is read in bounded pages, without a total-move
+HEAD reflog entry since the run started is read in bounded chunks, without a total-move
 limit, and diffed on those paths alone: a move that changes none of them is accepted,
-and one that does must be a merge or pull fast-forward. If the synthesis-start entry
-cannot be found because the reflog expired or was rewritten, the run refuses with that
-reason rather than guessing which moves are safe. A fingerprinted file such a fast-forward changed does not discard the
+and one that does must be a merge or pull fast-forward. The boundary is the exact raw
+reflog record captured at the start, not its mutable index or a repeated commit hash;
+each move must also join the next record's object IDs. If the start record is missing
+or the intervening history is incomplete after expiry or rewriting, the run refuses
+with that reason rather than guessing which moves are safe. A fingerprinted file such a fast-forward changed does not discard the
 proposal when Git reports it, and every symlink on the way to it, clean before and after
 the move (a symlinked pointer such as `CLAUDE.md` -> `AGENTS.md` is matched by its target,
 and an uncommitted retarget of the link still refuses). Any other change to a fingerprinted

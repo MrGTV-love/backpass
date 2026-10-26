@@ -231,27 +231,67 @@ function dirtyPaths(top, paths) {
     .map((entry) => entry.slice(3));
 }
 
+/** Newest-first raw records preserve operation identity, including both object IDs. */
+function* headReflogRecords(file) {
+  const fd = fs.openSync(file, "r");
+  try {
+    let position = fs.fstatSync(fd).size;
+    let pending = Buffer.alloc(0);
+    while (position > 0) {
+      const size = Math.min(position, 64 * 1024);
+      position -= size;
+      const chunk = Buffer.allocUnsafe(size);
+      if (fs.readSync(fd, chunk, 0, size, position) !== size) throw new Error("HEAD reflog changed while reading");
+      const data = Buffer.concat([chunk, pending]);
+      let end = data.length;
+      for (let i = data.length - 1; i >= 0; i -= 1) {
+        if (data[i] !== 10) continue;
+        if (i + 1 < end) yield data.subarray(i + 1, end).toString("utf8");
+        end = i;
+      }
+      pending = Buffer.from(data.subarray(0, end));
+    }
+    if (pending.length) yield pending.toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function newestHeadReflogRecord(file) {
+  for (const record of headReflogRecords(file)) return record;
+  return null;
+}
+
 /** Only the fingerprinted files are inspected; the rest of the checkout is not backpass's to judge. */
 function repoGitState(repo, files) {
   try {
     const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
     const root = fs.realpathSync(top);
     const chains = gitChains(root, repo, files);
-    const moves = Number(synthesisGit(root, ["rev-list", "--walk-reflogs", "--count", "HEAD"]).trim());
-    return { root, head, moves, chains, dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]) };
+    const reflog = path.resolve(root, synthesisGit(root, ["rev-parse", "--git-path", "logs/HEAD"]).trim());
+    const startRecord = newestHeadReflogRecord(reflog);
+    if (!startRecord || startRecord.split(" ", 2)[1] !== head) return null;
+    return {
+      root,
+      head,
+      reflog,
+      startRecord,
+      chains,
+      dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]),
+    };
   } catch {
     // User-scope memory and directory-only fixtures need not be git checkouts.
     return null;
   }
 }
 
-const REFLOG_PAGE_SIZE = 100;
 const REFLOG_UNAVAILABLE =
   "the synthesis-start HEAD entry cannot be found in the reflog; expired or rewritten history cannot establish which moves changed the fingerprinted files";
 
 /**
- * Every HEAD move since the snapshot (counted from the reflog length recorded then, so a
- * return to the starting commit cannot hide earlier moves), judged only on the fingerprinted
+ * Every HEAD move since the exact raw record captured at the start, not its mutable
+ * index or a repeated commit hash. Both object IDs must join the next record, so partial
+ * expiry cannot hide a local commit behind a later fast-forward. Judged only on the fingerprinted
  * paths it changes. A move that changes none is left alone; one that does must be an
  * ordinary merge/pull fast-forward, or the exemption is lost, since a harness's own commit,
  * checkout, reset, or rebase looks the same as anyone else's. Reflogs describe operations, not actors: a harness
@@ -263,58 +303,36 @@ function fastForwardFiles(git, paths) {
   if (!paths.length) return { files: new Set() };
   try {
     const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
-    const moves = Number(synthesisGit(git.root, ["rev-list", "--walk-reflogs", "--count", "HEAD"]).trim()) - git.moves;
-    if (!(moves >= 0)) return { reason: REFLOG_UNAVAILABLE };
     const files = new Set();
-    let previous;
-    // Page output, not history: every move back to the recorded start must be judged.
-    for (let offset = 0; offset <= moves; offset += REFLOG_PAGE_SIZE) {
-      const count = Math.min(REFLOG_PAGE_SIZE, moves + 1 - offset);
-      const output = synthesisGit(git.root, [
-        "reflog",
-        "show",
-        "--skip",
-        String(offset),
-        "-n",
-        String(count),
-        "--format=%H%x00%gs",
-        "HEAD",
-      ]).trimEnd();
-      const entries = output ? output.split("\n").map((entry) => entry.split("\0")) : [];
-      if (entries.length !== count || (offset === 0 && entries[0][0] !== head)) {
-        return { reason: REFLOG_UNAVAILABLE };
+    let expected = head;
+    let unsafe = false;
+    for (const record of headReflogRecords(git.reflog)) {
+      const match = /^([0-9a-f]+) ([0-9a-f]+) [^\t]+\t(.*)$/.exec(record);
+      if (!match) return { reason: REFLOG_UNAVAILABLE };
+      const [, from, to, subject] = match;
+      if (to !== expected) return { reason: REFLOG_UNAVAILABLE };
+      if (record === git.startRecord) {
+        if (to !== git.head) return { reason: REFLOG_UNAVAILABLE };
+        if (synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim() !== head) return null;
+        return unsafe ? null : { files };
       }
-      for (const entry of entries) {
-        if (previous) {
-          const [to, subject] = previous;
-          const from = entry[0];
-          if (from !== to) {
-            const touched = synthesisGit(git.root, [
-              "diff",
-              "--name-only",
-              "--no-renames",
-              "-z",
-              from,
-              to,
-              "--",
-              ...paths,
-            ])
-              .split("\0")
-              .filter(Boolean);
-            if (touched.length) {
-              if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) return null;
-              synthesisGit(git.root, ["merge-base", "--is-ancestor", from, to]);
-              for (const file of touched) files.add(file);
-            }
+      if (!unsafe && from !== to) {
+        const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...paths])
+          .split("\0")
+          .filter(Boolean);
+        if (touched.length) {
+          if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) unsafe = true;
+          else {
+            synthesisGit(git.root, ["merge-base", "--is-ancestor", from, to]);
+            for (const file of touched) files.add(file);
           }
         }
-        previous = entry;
       }
+      expected = from;
     }
-    if (previous?.[0] !== git.head) return { reason: REFLOG_UNAVAILABLE };
-    if (synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim() !== head) return null;
-    return { files };
-  } catch {
+    return { reason: REFLOG_UNAVAILABLE };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { reason: REFLOG_UNAVAILABLE };
     // Missing/pruned reflogs and non-forward history cannot establish an exemption.
   }
   return null;

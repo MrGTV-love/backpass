@@ -320,6 +320,32 @@ test("a local AGENTS.md commit replayed as a fast-forward from the starting comm
   assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
 });
 
+test("a replayed local commit with a partially expired start reflog still refuses", () => {
+  const dir = makeCliRepo({ memory: MEMORY });
+  const start = gitIn(dir, ["rev-parse", "HEAD"]);
+  const replayed = `${MEMORY}\n- An unsafe replayed edit.\n`;
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: { ...EDIT_TURN, [path.join(dir, "AGENTS.md")]: replayed },
+      repoGit: [
+        ["commit", "-qam", "harness wrote the repository"],
+        ["checkout", "-q", "--detach", start],
+        ["merge", "-q", "--ff-only", "main"],
+        ["reflog", "delete", "HEAD@{3}"],
+        ["reflog", "delete", "HEAD@{2}"],
+      ].map((args) => ({ cwd: dir, args })),
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.match(gitIn(dir, ["reflog", "-1", "--format=%gs"]), /^merge main: Fast-forward$/);
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "AGENTS.md"]), "");
+  assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), replayed);
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("the synthesis-start HEAD entry cannot be found in the reflog"), run.output);
+  assert.ok(run.output.includes("AGENTS.md changed in the repository during synthesis"), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+});
+
 test("a fast-forward does not excuse an uncommitted edit to another fingerprinted file", () => {
   const skillPath = ".agents/skills/build/SKILL.md";
   const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";
