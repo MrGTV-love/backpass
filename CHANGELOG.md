@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.40](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.39...backpass-v0.1.40) (2026-10-25)
+
+
+### Bug Fixes
+
+* deduplicate symlinked skills in the analysis index ([#231](https://github.com/kunchenguid/backpass/issues/231)) ([9ded619](https://github.com/kunchenguid/backpass/commit/9ded6192cd7eae8c63e40559b7832774b3bac2fb))
+
+## [0.1.39](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.38...backpass-v0.1.39) (2026-10-23)
+
+
+### Bug Fixes
+
+* run first Claude analysis call alone before fan-out ([#226](https://github.com/kunchenguid/backpass/issues/226)) ([3882b86](https://github.com/kunchenguid/backpass/commit/3882b86d84017bcdbf5e2cbe2e8c1fa9abeb3126))
+
+## [0.1.38](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.37...backpass-v0.1.38) (2026-10-21)
+
+
+### Bug Fixes
+
+* **workspace:** keep VCS internals and binary files out of the staging copy ([#220](https://github.com/kunchenguid/backpass/issues/220)) ([46a2169](https://github.com/kunchenguid/backpass/commit/46a21696be63197815346d01f6d4e116c16b4c10))
+
+## [0.1.37](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.36...backpass-v0.1.37) (2026-10-20)
+
+
+### Bug Fixes
+
+* **acpx:** treat a model the adapter turns down as model-unavailable ([#219](https://github.com/kunchenguid/backpass/issues/219)) ([3986087](https://github.com/kunchenguid/backpass/commit/398608764b6a7d40de142eafbf2e568921406fa9))
+
 ## [0.1.36](https://github.com/kunchenguid/backpass/compare/backpass-v0.1.35...backpass-v0.1.36) (2026-10-16)
 
 

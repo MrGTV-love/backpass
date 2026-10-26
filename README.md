@@ -467,7 +467,8 @@ A high-reasoning synthesis run turns the aggregated gradients into concrete edit
 REMOVE, REWRITE, EXTRACT→SKILL, or MOVE. The agent does not describe edits for backpass to
 splice in - it makes them, with its harness's own file tools, in a **staging copy** of the
 memory file and project skills under `.backpass/synthesis/` (the repo itself is read-only
-to it, for grounding). Named nested files use their own staging copies and do not stage skills
+to it, for grounding). Version-control internals (`.git`, `.hg`, `.svn`) and binary files
+under a skill directory stay out of the copy and are read-only. Named nested files use their own staging copies and do not stage skills
 (see [Nested memory files](#10-nested-memory-files-in-a-monorepo)). backpass then diffs
 against the originals and shows the agent the measured changes by id; the agent annotates each one with a title, rationale, and the
 verbatim evidence behind it. Nothing textual is ever taken from the model: every hunk's
@@ -585,6 +586,9 @@ every skill's name and trigger line, stamps a gap it judges covered by an existi
 with `coveredBySkill`, and the gap ledger corroborates those citations across sessions
 before synthesis is told to fix the trigger. The same coverage check retires a ledger gap
 once a skill's content answers it, so a gap resolved by extraction stops resurfacing.
+The analysis index lists each skill file once by realpath, keeping its first loaded path
+when symlinks across harness roots share a file. Distinct files remain separate even when
+their names match. This does not change [per-copy budget accounting](#6-the-budget---model-size).
 
 Skills are protected by the same floors as the memory file: text deleted from a skill
 file is a removal, and since no evidence can attribute to skill text, no deletion there
