@@ -521,12 +521,13 @@ past the staging copy into the repo is an error, never an apply.
 
 Only the fingerprinted memory and skill files are checked; edits, commits, and new files
 elsewhere in the checkout are left alone. A fingerprinted file that a clean Git fast-forward
-changed during synthesis does not discard the proposal: Git must report it clean before and
-after the move, the intervening commit diff must name it (a symlinked pointer such as
-`CLAUDE.md` -> `AGENTS.md` is matched by its target), and the HEAD reflog must reach the
-starting commit within its newest 100 entries through merge or pull fast-forwards only. Any other change
-to a fingerprinted file still refuses the run and names it, including a local commit, a
-rewrite, or an uncommitted edit. Read-only search-path skills and paths outside the
+changed during synthesis does not discard the proposal: Git must report it, and every
+symlink on the way to it, clean before and after the move, the intervening commit diff must
+name the file it now reaches (a symlinked pointer such as `CLAUDE.md` -> `AGENTS.md` is
+matched by its target, and an uncommitted retarget of the link still refuses), and the HEAD
+reflog must reach the starting commit within its newest 100 entries through merge or pull
+fast-forwards only. Any other change to a fingerprinted file still refuses the run and names
+it, including a local commit, a rewrite, or an uncommitted edit. Read-only search-path skills and paths outside the
 repository keep the strict check. This catches ordinary harness-made commits, but it cannot
 tell who ran a fast-forward or detect a forged reflog entry: it is a write-through check,
 not a security sandbox. The proposal still uses the staging originals, and apply still

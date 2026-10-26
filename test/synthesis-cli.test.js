@@ -250,6 +250,43 @@ test("a fast-forward through a symlinked CLAUDE.md pointer preserves the measure
   assert.equal(proposalOf(dir).edits[0].kind, "extract");
 });
 
+test("a fast-forward does not excuse an uncommitted retarget of the CLAUDE.md symlink", () => {
+  const dir = makeCliRepo({ memory: MEMORY, files: { "B.md": MEMORY }, links: { "CLAUDE.md": "AGENTS.md" } });
+  const { clone, next } = upstreamCommit(dir, { "B.md": MEMORY.replace("- Never use the em dash.", "- Never.") });
+  const patch = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "backpass-retarget-")), "retarget.patch");
+  fs.writeFileSync(
+    patch,
+    [
+      "diff --git a/CLAUDE.md b/CLAUDE.md",
+      "--- a/CLAUDE.md",
+      "+++ b/CLAUDE.md",
+      "@@ -1 +1 @@",
+      "-AGENTS.md",
+      "\\ No newline at end of file",
+      "+B.md",
+      "\\ No newline at end of file",
+      "",
+    ].join("\n"),
+  );
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: EDIT_TURN,
+      repoGit: [
+        { cwd: dir, args: ["fetch", "-q", clone, "main"] },
+        { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
+        { cwd: dir, args: ["apply", patch] },
+      ],
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  assert.equal(gitIn(dir, ["rev-parse", "HEAD"]), next);
+  assert.equal(fs.readlinkSync(path.join(dir, "CLAUDE.md")), "B.md");
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "CLAUDE.md"]), "M CLAUDE.md");
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("CLAUDE.md changed in the repository during synthesis"), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+});
+
 for (const scenario of [
   { name: "an uncommitted src/ edit and new file", git: [] },
   {

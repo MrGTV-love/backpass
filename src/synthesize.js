@@ -166,23 +166,48 @@ function synthesisGit(cwd, args) {
   });
 }
 
-function realPath(absolute) {
-  try {
-    return fs.realpathSync(absolute);
-  } catch {
-    const parent = path.dirname(absolute);
-    return parent === absolute ? absolute : path.join(realPath(parent), path.basename(absolute));
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Every repository path git tracks on the way to a fingerprinted file: each symlink it
+ * passes through, then the file itself. A direct edit anywhere on the chain is a direct edit.
+ */
+function resolutionChain(top, absolute) {
+  const chain = [];
+  let current = absolute;
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop += 1) {
+    const relative = path.relative(top, current);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    const parts = relative.split(path.sep);
+    let link = null;
+    for (let i = 0; i < parts.length && !link; i += 1) {
+      const at = path.join(top, ...parts.slice(0, i + 1));
+      let stat;
+      try {
+        stat = fs.lstatSync(at);
+      } catch {
+        break;
+      }
+      if (stat.isSymbolicLink()) link = { at, rest: parts.slice(i + 1) };
+    }
+    chain.push(relative.split(path.sep).join("/"));
+    if (!link) return chain;
+    if (link.rest.length) chain[chain.length - 1] = path.relative(top, link.at).split(path.sep).join("/");
+    current = path.resolve(path.dirname(link.at), fs.readlinkSync(link.at), ...link.rest);
   }
+  return null;
 }
 
-/** Fingerprinted keys as git names them: a symlinked pointer or skills dir maps to its target. */
-function gitPaths(top, repo, files) {
+/** Fingerprinted keys as git names them, through any symlinked pointer or skills dir. */
+function gitChains(top, repo, files) {
+  const root = fs.realpathSync(repo.root);
   const out = {};
   for (const file of files) {
-    const relative = path.relative(top, realPath(repoFilePath(repo, file)));
-    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-      out[file] = relative.split(path.sep).join("/");
-    }
+    const absolute = repoFilePath(repo, file);
+    const relative = path.relative(repo.root, absolute);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    const chain = resolutionChain(top, path.join(root, relative));
+    if (chain) out[file] = chain;
   }
   return out;
 }
@@ -196,6 +221,7 @@ function dirtyPaths(top, paths) {
     "--porcelain=v1",
     "-z",
     "--untracked-files=all",
+    "--ignored",
     "--no-renames",
     "--",
     ...paths,
@@ -210,7 +236,8 @@ function repoGitState(repo, files) {
   try {
     const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
     const root = fs.realpathSync(top);
-    return { root, head, dirty: dirtyPaths(root, Object.values(gitPaths(root, repo, files))) };
+    const chains = gitChains(root, repo, files);
+    return { root, head, chains, dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]) };
   } catch {
     // User-scope memory and directory-only fixtures need not be git checkouts.
     return null;
@@ -249,19 +276,29 @@ function fastForwardFiles(git) {
   return null;
 }
 
-/** The changed fingerprinted files a clean fast-forward fully explains: named by it, clean before and after. */
+/**
+ * The changed fingerprinted files a clean fast-forward fully explains: the commit diff names
+ * the file now reached, and every path on its resolution chain, then and now, is clean at
+ * both ends, so neither the file nor any link to it was edited directly.
+ */
 function explainedByFastForward(repo, git, changed) {
   const advanced = git && changed.length ? fastForwardFiles(git) : null;
   if (!advanced) return new Set();
-  const named = Object.entries(gitPaths(git.root, repo, changed)).filter(([, relative]) => advanced.includes(relative));
-  const relatives = named.map(([, relative]) => relative);
-  let dirty;
   try {
-    dirty = [...git.dirty, ...dirtyPaths(git.root, relatives)];
+    const chains = gitChains(git.root, repo, changed);
+    const named = changed.filter(
+      (file) =>
+        git.chains[file] &&
+        chains[file] &&
+        advanced.includes(chains[file].at(-1)) &&
+        !git.chains[file].some((relative) => git.dirty.includes(relative)),
+    );
+    const paths = (file) => [...new Set([...git.chains[file], ...chains[file]])];
+    const dirty = dirtyPaths(git.root, [...new Set(named.flatMap(paths))]);
+    return new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative))));
   } catch {
     return new Set();
   }
-  return new Set(named.filter(([, relative]) => !dirty.includes(relative)).map(([file]) => file));
 }
 
 /**
