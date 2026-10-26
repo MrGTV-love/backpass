@@ -74,7 +74,18 @@ export async function captureModelActivity(capture, { promptFile, stallTimeoutSe
     ) {
       text += update.content.text;
     }
-    if (message.error) errors += `${message.error.message || JSON.stringify(message.error)}\n`;
+    if (message.error) {
+      // Match acpx's quiet diagnostic contract: JSON errors retain adapter details
+      // and detailCode in data (output-lylSoEBd.js:72-107,925-929,994-996).
+      // These carry AUTH_REQUIRED/model rejection even when message is generic.
+      const data = message.error.data;
+      const qualifier = [data?.acpxCode, data?.detailCode].filter((value) => typeof value === "string").join(" ");
+      const detail =
+        typeof data?.details === "string" && data.details.trim()
+          ? data.details.trim()
+          : message.error.message || JSON.stringify(message.error);
+      errors += `[acpx] error: ${qualifier ? `${qualifier} ` : ""}${String(detail).replace(/\r\n?|\n/g, " ")}\n`;
+    }
     if (message.result?.usage) {
       const raw = message.result.usage;
       usage = {};

@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import test from "node:test";
 
 import { captureModelActivity } from "../src/model-activity.js";
+import { classifyAcpxFailure } from "../src/acpx.js";
 import { clearProgressSink, setProgressSink } from "../src/progress.js";
 import { initialState, reduceEvent } from "../src/tui/index.js";
 import { renderFrame } from "../src/tui/render.js";
@@ -126,6 +127,28 @@ test("default silent call survives and live UI reports silence without cancellat
   assert.equal(result.stalled, false);
   assert.deepEqual(state.modelCalls, {});
 });
+
+/** @type {[{ detailCode: string, details: string }, string][]} */
+const errorCases = [
+  [{ detailCode: "AUTH_REQUIRED", details: "Sign in before sending a prompt" }, "unauthenticated"],
+  [{ detailCode: "PROVIDER_ERROR", details: "This account does not support this model" }, "model-unavailable"],
+];
+for (const [data, verdict] of errorCases) {
+  test(`structured ACP diagnostics preserve ${verdict} classification`, async (t) => {
+    const options = fixture(t);
+    const result = await captureModelActivity(async ({ onStdout }) => {
+      onStdout(
+        Buffer.from(
+          JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "Request failed", data } }) + "\n",
+        ),
+      );
+      return { code: 1, stdout: "", stderr: "" };
+    }, options);
+    assert.ok(result.stderr.includes(data.detailCode));
+    assert.ok(result.stderr.includes(data.details));
+    assert.equal(classifyAcpxFailure(result), verdict);
+  });
+}
 
 test("stream decodes split UTF-8 and excludes thoughts, tools and prompts from answer", async (t) => {
   const options = fixture(t);
