@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import { extractJson, isBlankOutput, openSession, usageRecord } from "./acpx.js";
 import { expandHomePath, userClaudeSkillsDir } from "./config.js";
@@ -14,7 +15,7 @@ import {
   resolveProjectSkillDirs,
   skillDescriptionTokens,
 } from "./skills.js";
-import { isSuppressedByRejection } from "./state.js";
+import { isSuppressedByRejection, sha256 } from "./state.js";
 import { SURFACE_TARGET } from "./target.js";
 import { emitProgress } from "./progress.js";
 import {
@@ -157,8 +158,65 @@ function harnessCountsOf(transcripts) {
   return counts;
 }
 
+function synthesisGit(repo, args) {
+  return execFileSync("git", args, { cwd: repo.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+}
+
+/** Dirty paths include new files, not just the memory paths known before the turn. */
+function repoGitState(repo) {
+  let head;
+  try {
+    head = synthesisGit(repo, ["rev-parse", "--verify", "HEAD"]).trim();
+  } catch {
+    // User-scope memory and directory-only fixtures need not be git checkouts.
+    return null;
+  }
+  const entries = synthesisGit(repo, [
+    "--no-optional-locks",
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--no-renames",
+  ])
+    .split("\0")
+    .filter(Boolean);
+  const statuses = Object.fromEntries(entries.map((entry) => [entry.slice(3), entry.slice(0, 2)]));
+  const hashes = repoFingerprint(repo, Object.keys(statuses));
+  return {
+    head,
+    dirty: Object.fromEntries(Object.entries(statuses).map(([file, status]) => [file, `${status}:${hashes[file]}`])),
+  };
+}
+
 /**
- * The repo must be exactly as fingerprinted; the staging copy is the only place to write.
+ * An ancestry check alone would excuse a harness's own commit. Only ordinary merge/pull
+ * fast-forwards qualify, and every intervening HEAD reflog entry must confirm that form.
+ * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
+ * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
+ */
+function committedAdvance(repo, before, after) {
+  if (before.head === after.head) return { files: [], fastForward: false };
+  const files = synthesisGit(repo, ["diff", "--name-only", "--no-renames", "-z", before.head, after.head, "--"])
+    .split("\0")
+    .filter(Boolean);
+  try {
+    synthesisGit(repo, ["merge-base", "--is-ancestor", before.head, after.head]);
+    const entries = synthesisGit(repo, ["reflog", "show", "--format=%H%x00%gs", "HEAD"]).trimEnd().split("\n");
+    for (const entry of entries) {
+      const [head, subject] = entry.split("\0");
+      if (head === before.head) return { files, fastForward: true };
+      if (!/^(merge |pull ).*: Fast-forward$/.test(subject)) break;
+    }
+  } catch {
+    // Missing/pruned reflogs and non-forward history cannot establish an exemption.
+  }
+  return { files, fastForward: false };
+}
+
+/**
+ * The repo must be exactly as fingerprinted, except clean committed fast-forwards;
+ * the staging copy is still the only place for the synthesis harness to write.
  *
  * Skills staging withheld are left out: such a file is one backpass has guaranteed it will
  * never write, so aborting a run over a third party's edit to it would discard measured
@@ -176,9 +234,16 @@ function harnessCountsOf(transcripts) {
  * may ever write this," so a change there must still fail the run.
  */
 function assertRepoUntouched(repo, before, workspace) {
-  const after = repoFingerprint(repo, Object.keys(before));
-  const moved = Object.keys(before).filter((file) => before[file] !== after[file]);
-  if (!moved.length) return;
+  const after = repoFingerprint(repo, Object.keys(before.files));
+  const gitAfter = before.git ? repoGitState(repo) : null;
+  if (before.git && !gitAfter)
+    throw new UserError("could not inspect repository git state during synthesis; nothing was proposed");
+  const advance = gitAfter ? committedAdvance(repo, before.git, gitAfter) : { files: [], fastForward: false };
+  const dirtyChanges = gitAfter
+    ? [...new Set([...Object.keys(before.git.dirty), ...Object.keys(gitAfter.dirty)])].filter(
+        (file) => before.git.dirty[file] !== gitAfter.dirty[file],
+      )
+    : [];
   const insideRepo = (file) => {
     try {
       resolveMemoryPath(repo.root, file);
@@ -187,6 +252,37 @@ function assertRepoUntouched(repo, before, workspace) {
       return false;
     }
   };
+  const explainedByCommit = (file) => {
+    const relative = path.relative(repo.root, repoFilePath(repo, file)).split(path.sep).join("/");
+    if (!advance.fastForward || !insideRepo(file) || !advance.files.includes(relative)) return false;
+    if (relative in before.git.dirty || relative in gitAfter.dirty) return false;
+    if (
+      workspace.unstageable.some(
+        (entry) => entry.reason === READ_ONLY_SEARCH_PATH && (file === entry.path || file.startsWith(`${entry.path}/`)),
+      )
+    )
+      return false;
+    const committedHash = (head) => {
+      try {
+        return sha256(synthesisGit(repo, ["show", `${head}:${relative}`]));
+      } catch {
+        return null;
+      }
+    };
+    return before.files[file] === committedHash(before.git.head) && after[file] === committedHash(gitAfter.head);
+  };
+  const withheld = (file) =>
+    workspace.unstageable.some(
+      (entry) => entry.reason !== READ_ONLY_SEARCH_PATH && (file === entry.path || file.startsWith(`${entry.path}/`)),
+    );
+  const moved = [
+    ...new Set([
+      ...Object.keys(before.files).filter((file) => before.files[file] !== after[file] && !explainedByCommit(file)),
+      ...dirtyChanges.filter((file) => !withheld(file)),
+      ...(advance.fastForward ? [] : advance.files.filter((file) => !withheld(file))),
+    ]),
+  ];
+  if (!moved.length) return;
   // The fingerprint only proves a file changed, not who changed it: in a shared workspace
   // another session or a cron job can edit it mid-run. The harness is named only when the
   // repository file now equals the staging copy, which a bystander has no reason to produce.
@@ -652,17 +748,22 @@ export async function synthesizeProposal({
   // it has to be detected, not silently excused the way an ordinary withheld skill is
   // (design note above `assertRepoUntouched`). It stays in the fingerprint so a change
   // there still fails the run loudly.
-  const fingerprint = repoFingerprint(repo, [
-    ...new Set(
-      [memoryFile.path, ...config.memoryFiles, ...(config.nestedMemoryFiles || []), routing?.rootPath].filter(Boolean),
-    ),
-    ...skillFiles
-      .filter((skill) => {
-        const reason = readOnlyReason(skill.path);
-        return !reason || reason === READ_ONLY_SEARCH_PATH;
-      })
-      .map((skill) => skill.path),
-  ]);
+  const fingerprint = {
+    git: repoGitState(repo),
+    files: repoFingerprint(repo, [
+      ...new Set(
+        [memoryFile.path, ...config.memoryFiles, ...(config.nestedMemoryFiles || []), routing?.rootPath].filter(
+          Boolean,
+        ),
+      ),
+      ...skillFiles
+        .filter((skill) => {
+          const reason = readOnlyReason(skill.path);
+          return !reason || reason === READ_ONLY_SEARCH_PATH;
+        })
+        .map((skill) => skill.path),
+    ]),
+  };
   const sessionName = `backpass-synth-${process.pid}`;
   const timeoutSeconds = Math.max(config.timeoutSeconds, 900);
   const usage = [];
@@ -719,7 +820,7 @@ export async function synthesizeProposal({
     // repository; rebasing over that write would hide it, so it is reported before the rebuild.
     if (attempted) assertRepoUntouched(repo, fingerprint, workspace);
     workspace = prepareWorkspace(workspaceOptions);
-    rebaseFingerprint(fingerprint, workspace);
+    rebaseFingerprint(fingerprint.files, workspace);
     attempted = true;
     progress("edit", { attempt: 1 });
     holder.session = await openSession({

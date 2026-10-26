@@ -4,7 +4,8 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { memorySetHash, memoryTextHash } from "../../src/memory.js";
+import { memorySetHash, memorySurfaceHash, memoryTextHash } from "../../src/memory.js";
+import { loadProjectSkills } from "../../src/skills.js";
 import { evidenceKey } from "../../src/state.js";
 import { transcriptIdentity } from "../../src/transcript.js";
 
@@ -101,6 +102,9 @@ if (entry.turn === "edit") {
     process.exit(0);
   }
   applyEdits(script.edit);
+  for (const { cwd: repo, args } of script.repoGit || []) {
+    require("node:child_process").execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+  }
   process.stdout.write("Edited the staging copy.\\n");
   process.stderr.write("[acpx] tokens: input=1000 output=20 total=1020\\n");
 } else {
@@ -141,9 +145,12 @@ export function makeCliRepo({ memory, sessions = 3, files = {} }) {
 
   const evidenceDir = path.join(dir, ".backpass", "evidence");
   fs.mkdirSync(evidenceDir, { recursive: true });
-  // Real evidence always carries the set hash it was judged against (`foldForRun` filters
-  // on it); match what the CLI computes for this repo's memory files so fold picks it up.
-  const memoryHash = memorySetHash([{ path: "AGENTS.md", hash: memoryTextHash(memory) }]);
+  // Real evidence carries the complete memory-surface hash (`foldForRun` filters on it),
+  // including existing skill descriptions; match the CLI so skill fixtures stay fresh.
+  const memoryHash = memorySurfaceHash(
+    memorySetHash([{ path: "AGENTS.md", hash: memoryTextHash(memory) }]),
+    loadProjectSkills(dir),
+  );
   const projectDir = path.join(emptyHome, ".claude", "projects", dir.replaceAll(/[/\\.]/g, "-"));
   fs.mkdirSync(projectDir, { recursive: true });
   for (let i = 1; i <= sessions; i += 1) {

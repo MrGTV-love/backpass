@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { annotatePrompts, makeCliRepo, readJson, runCli, snapshotTree } from "./helpers/synthesis-cli.js";
@@ -138,6 +139,94 @@ const SPLIT_THE_COPY = { editFirst: { "AGENTS.md": { replace: [[POINTERS, SPLIT]
 
 const proposalOf = (dir) => readJson(path.join(dir, ".backpass", "proposal.json"));
 const stagedTree = (dir) => snapshotTree(path.join(dir, ".backpass", "synthesis"));
+
+for (const stray of [null, "unexpected.md"]) {
+  test(
+    stray
+      ? "a fast-forward does not excuse a new untracked file"
+      : "a clean fast-forward during synthesis preserves the measured proposal",
+    () => {
+      const skillPath = ".agents/skills/build/SKILL.md";
+      const original = "---\nname: build\ndescription: Build the project.\n---\n\nRun make build.\n";
+      const updated = original.replace("make build", "make release");
+      const dir = makeCliRepo({ memory: MEMORY, files: { [skillPath]: original } });
+      const clone = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-updater-"));
+      const git = (cwd, args) =>
+        execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+      git(clone, ["clone", "-q", dir, "."]);
+      git(clone, ["config", "user.email", "test@example.com"]);
+      git(clone, ["config", "user.name", "test"]);
+      fs.writeFileSync(path.join(clone, skillPath), updated);
+      git(clone, ["commit", "-qam", "update build skill"]);
+      const next = git(clone, ["rev-parse", "HEAD"]);
+      const run = runCli(dir, ["propose", ...PIN], {
+        script: {
+          edit: { ...EDIT_TURN, ...(stray ? { [path.join(dir, stray)]: "Unexpected repository write.\n" } : {}) },
+          repoGit: [
+            { cwd: dir, args: ["fetch", "-q", clone, "main"] },
+            { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
+          ],
+          annotations: [{ reply: COALESCED_ANSWER }],
+        },
+      });
+      assert.equal(git(dir, ["rev-parse", "HEAD"]), next);
+      assert.equal(fs.readFileSync(path.join(dir, skillPath), "utf8"), updated);
+      if (stray) {
+        assert.equal(run.status, 1, run.output);
+        assert.ok(run.output.includes(`${stray} changed in the repository during synthesis`), run.output);
+        assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+      } else {
+        assert.equal(run.status, 0, run.output);
+        assert.equal(proposalOf(dir).edits[0].kind, "extract");
+        assert.deepEqual(proposalOf(dir).violations ?? [], []);
+      }
+    },
+  );
+}
+
+for (const scenario of [
+  { name: "uncommitted tracked edit", file: "AGENTS.md", text: `${MEMORY}\n- An unsafe direct edit.\n` },
+  {
+    name: "staged tracked edit",
+    file: "AGENTS.md",
+    text: `${MEMORY}\n- An unsafe staged edit.\n`,
+    git: [["add", "AGENTS.md"]],
+  },
+  { name: "untracked new file", file: "new-instructions.md", text: "Unsafe new instructions.\n" },
+  {
+    name: "harness-made commit",
+    file: "AGENTS.md",
+    text: `${MEMORY}\n- An unsafe committed edit.\n`,
+    git: [
+      ["add", "AGENTS.md"],
+      ["commit", "-qm", "harness wrote the repository"],
+    ],
+  },
+]) {
+  test(`synthesis refuses a ${scenario.name} and names the changed file`, () => {
+    const dir = makeCliRepo({ memory: MEMORY });
+    const run = runCli(dir, ["propose", ...PIN], {
+      script: {
+        edit: { ...EDIT_TURN, [path.join(dir, scenario.file)]: scenario.text },
+        repoGit: (scenario.git || []).map((args) => ({ cwd: dir, args })),
+        annotations: [{ reply: COALESCED_ANSWER }],
+      },
+    });
+    assert.equal(run.status, 1, run.output);
+    assert.ok(run.output.includes(`${scenario.file} changed in the repository during synthesis`), run.output);
+    assert.ok(run.output.includes("nothing was proposed"), run.output);
+    assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+    assert.equal(fs.readFileSync(path.join(dir, scenario.file), "utf8"), scenario.text);
+    if (scenario.git) {
+      const status = execFileSync("git", ["status", "--porcelain", "--", scenario.file], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      if (scenario.name === "harness-made commit") assert.equal(status, "", "a clean harness commit must still refuse");
+      else assert.ok(status.startsWith("M "), status);
+    }
+  });
+}
 
 test("propose stages extracts in an existing configured Claude skills directory", () => {
   const dir = makeCliRepo({ memory: MEMORY });
