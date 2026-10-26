@@ -181,7 +181,8 @@ test("a tool request's error reply is not the call's diagnostic; acpx's terminal
 });
 
 test("acpx's own timeout on an uncapped turn or setup step never advises timeoutSeconds", async (t) => {
-  for (const [mode, call] of [
+  /** @type {Array<[string, (promptFile: string) => Promise<unknown>]>} */
+  const cases = [
     [
       "prompt-timeout",
       (promptFile) => sessionPrompt({ agent: "codex", sessionName: "bp-acpx-timeout", promptFile, cwd: fixtureDir }),
@@ -192,7 +193,8 @@ test("acpx's own timeout on an uncapped turn or setup step never advises timeout
       (promptFile) =>
         sessionPrompt({ agent: "codex", effort: "medium", sessionName: "bp-set-timeout", promptFile, cwd: fixtureDir }),
     ],
-  ]) {
+  ];
+  for (const [mode, call] of cases) {
     await t.test(mode, async (st) => {
       const err = await call(withMode(st, mode)).then(
         () => assert.fail("a timed-out call resolved"),

@@ -994,7 +994,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
   evidence-summary.json  aggregated gradients
   proposal.json          the latest parseable gradient-descent step (absent if none was produced)
   synthesis/             the staging copy the gradient-descent agent edited (memory file + skills)
-  prompts/               the exact prompts of the last run
+  prompts/               the exact prompts of the last run, with their *.activity.jsonl timings
   agent-probe-cache.json which harnesses were available and logged in, and when
   rejections.json        edits you turned down, and the evidence behind them
   gap-ledger.json        durable gap sightings (see Aggregate gradients)
