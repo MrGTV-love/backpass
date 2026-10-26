@@ -198,18 +198,58 @@ function resolutionChain(top, absolute) {
   return null;
 }
 
-/** Fingerprinted keys as git names them, through any symlinked pointer or skills dir. */
-function gitChains(top, repo, files) {
+/** Fingerprinted keys as paths from the git top, before any symlink is followed. */
+function gitOrigins(top, repo, files) {
   const root = fs.realpathSync(repo.root);
   const out = {};
   for (const file of files) {
-    const absolute = repoFilePath(repo, file);
-    const relative = path.relative(repo.root, absolute);
+    const relative = path.relative(repo.root, repoFilePath(repo, file));
     if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
-    const chain = resolutionChain(top, path.join(root, relative));
+    const origin = path.relative(top, path.join(root, relative));
+    if (origin && !origin.startsWith("..") && !path.isAbsolute(origin)) out[file] = origin.split(path.sep).join("/");
+  }
+  return out;
+}
+
+/** Fingerprinted keys as git names them, through any symlinked pointer or skills dir. */
+function gitChains(top, repo, files) {
+  const out = {};
+  for (const [file, origin] of Object.entries(gitOrigins(top, repo, files))) {
+    const chain = resolutionChain(top, path.join(top, origin));
     if (chain) out[file] = chain;
   }
   return out;
+}
+
+/**
+ * Every path `resolutionChain` would pass through for `origins`, read from a commit's tree
+ * instead of the checkout, so a link a move retargeted is followed as it was on each side.
+ */
+function treeChainPaths(top, commit, origins) {
+  const prefixes = (relative) => relative.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+  const paths = new Set();
+  let pending = [...new Set(origins)];
+  for (let hop = 0; hop < MAX_LINK_HOPS && pending.length; hop += 1) {
+    const links = new Map();
+    const entries = synthesisGit(top, ["ls-tree", "-z", commit, "--", ...new Set(pending.flatMap(prefixes))]);
+    for (const entry of entries.split("\0")) {
+      const match = /^120000 blob ([0-9a-f]+)\t(.*)$/s.exec(entry);
+      if (match) links.set(match[2], match[1]);
+    }
+    const next = [];
+    for (const relative of pending) {
+      const link = prefixes(relative).find((prefix) => links.has(prefix));
+      paths.add(link ?? relative);
+      if (!link) continue;
+      const target = synthesisGit(top, ["cat-file", "blob", links.get(link)]);
+      const resolved = path.posix.join(path.posix.dirname(link), target, relative.slice(link.length + 1));
+      if (!path.posix.isAbsolute(target) && resolved !== "." && resolved !== ".." && !resolved.startsWith("../")) {
+        next.push(resolved);
+      }
+    }
+    pending = [...new Set(next)];
+  }
+  return paths;
 }
 
 /** Git's own clean check, so checkout filters (autocrlf, smudge) do not read as edits. */
@@ -268,6 +308,7 @@ function repoGitState(repo, files) {
     const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
     const root = fs.realpathSync(top);
     const chains = gitChains(root, repo, files);
+    const origins = Object.values(gitOrigins(root, repo, files));
     const reflog = path.resolve(root, synthesisGit(root, ["rev-parse", "--git-path", "logs/HEAD"]).trim());
     const startRecord = newestHeadReflogRecord(reflog);
     if (!startRecord || startRecord.split(" ", 2)[1] !== head) return null;
@@ -276,6 +317,7 @@ function repoGitState(repo, files) {
       head,
       reflog,
       startRecord,
+      origins,
       chains,
       dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]),
     };
@@ -292,12 +334,14 @@ const REFLOG_UNAVAILABLE =
  * Every HEAD move since the exact raw record captured at the start, not its mutable
  * index or a repeated commit hash. Both object IDs must join the next record, so partial
  * expiry cannot hide a local commit behind a later fast-forward. Judged only on the fingerprinted
- * paths it changes. A move that changes none is left alone; one that does must be an
- * ordinary merge/pull fast-forward, or the exemption is lost, since a harness's own commit,
- * checkout, reset, or rebase looks the same as anyone else's. Reflogs describe operations, not actors: a harness
- * can itself fast-forward (or forge a reflog). This is accidental write-through detection,
- * not a sandbox against hostile tools. Returns the fingerprinted paths fast-forwards changed,
- * a reason when the synthesis-start boundary is unavailable, or null for other unsafe moves.
+ * paths it changes, with each symlink chain resolved in both of its commits as well as at the
+ * start and now. A move that changes none is left alone; one that does must be an ordinary
+ * merge/pull fast-forward (a record with no message never is), or the exemption is lost,
+ * since a harness's own commit, checkout, reset, or rebase looks the same as anyone else's.
+ * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
+ * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
+ * Returns the fingerprinted paths fast-forwards changed, a reason when the synthesis-start
+ * boundary is unavailable, or null for other unsafe moves.
  */
 function fastForwardFiles(git, paths) {
   if (!paths.length) return { files: new Set() };
@@ -306,10 +350,15 @@ function fastForwardFiles(git, paths) {
     const files = new Set();
     let expected = head;
     let unsafe = false;
+    const trees = new Map();
+    const chainPaths = (commit) => {
+      if (!trees.has(commit)) trees.set(commit, treeChainPaths(git.root, commit, git.origins));
+      return trees.get(commit);
+    };
     for (const record of headReflogRecords(git.reflog)) {
-      const match = /^([0-9a-f]+) ([0-9a-f]+) [^\t]+\t(.*)$/.exec(record);
+      const match = /^([0-9a-f]+) ([0-9a-f]+) [^\t]*(?:\t(.*))?$/.exec(record);
       if (!match) return { reason: REFLOG_UNAVAILABLE };
-      const [, from, to, subject] = match;
+      const [, from, to, subject = ""] = match;
       if (to !== expected) return { reason: REFLOG_UNAVAILABLE };
       if (record === git.startRecord) {
         if (to !== git.head) return { reason: REFLOG_UNAVAILABLE };
@@ -317,7 +366,8 @@ function fastForwardFiles(git, paths) {
         return unsafe ? null : { files };
       }
       if (!unsafe && from !== to) {
-        const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...paths])
+        const moved = new Set([...paths, ...chainPaths(from), ...chainPaths(to)]);
+        const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...moved])
           .split("\0")
           .filter(Boolean);
         if (touched.length) {
@@ -340,8 +390,9 @@ function fastForwardFiles(git, paths) {
 
 /**
  * The changed fingerprinted files a clean fast-forward fully explains: a fast-forward changed
- * the file now reached, and every path on its resolution chain, then and now, is clean at
- * both ends, so neither the file nor any link to it was edited directly.
+ * a path on its resolution chain (the file or a link retargeted upstream), no other kind of
+ * move touched any chain, and every path on its chain, then and now, is clean at both ends,
+ * so neither the file nor any link to it was edited directly.
  */
 function explainedByFastForward(repo, git, changed) {
   if (!git || !changed.length) return { files: new Set() };
@@ -351,14 +402,14 @@ function explainedByFastForward(repo, git, changed) {
       ...new Set([...Object.values(git.chains).flat(), ...Object.values(chains).flat()]),
     ]);
     if (!advanced?.files) return { files: new Set(), reason: advanced?.reason };
+    const paths = (file) => [...new Set([...git.chains[file], ...chains[file]])];
     const named = changed.filter(
       (file) =>
         git.chains[file] &&
         chains[file] &&
-        advanced.files.has(chains[file].at(-1)) &&
+        paths(file).some((relative) => advanced.files.has(relative)) &&
         !git.chains[file].some((relative) => git.dirty.includes(relative)),
     );
-    const paths = (file) => [...new Set([...git.chains[file], ...chains[file]])];
     const dirty = dirtyPaths(git.root, [...new Set(named.flatMap(paths))]);
     return { files: new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative)))) };
   } catch {

@@ -528,12 +528,16 @@ and one that does must be a merge or pull fast-forward. The boundary is the exac
 reflog record captured at the start, not its mutable index or a repeated commit hash;
 each move must also join the next record's object IDs. If the start record is missing
 or the intervening history is incomplete after expiry or rewriting, the run refuses
-with that reason rather than guessing which moves are safe. A fingerprinted file such a fast-forward changed does not discard the
-proposal when Git reports it, and every symlink on the way to it, clean before and after
-the move (a symlinked pointer such as `CLAUDE.md` -> `AGENTS.md` is matched by its target,
-and an uncommitted retarget of the link still refuses). Any other change to a fingerprinted
-file still refuses the run and names it, including a local commit, checkout, reset, or
-rebase that changes one, or an uncommitted edit. Read-only search-path skills and paths
+with that reason rather than guessing which moves are safe. A reflog record written
+without a message is still followed, but it never counts as a fast-forward. Symlinks
+are followed as each move's old and new commits record them, so a file a pointer only
+reached between two moves still counts. A fingerprinted file such a fast-forward changed
+(its content, or a committed retarget of a pointer such as `CLAUDE.md` -> `AGENTS.md`)
+does not discard the proposal when Git reports it, and every symlink on the way to it,
+clean before and after the run; an uncommitted retarget of the link still refuses. Any
+other change to a fingerprinted file still refuses the run and names it, including a
+local commit, checkout, reset, or rebase that changes one or a file its pointer reached
+at the time, or an uncommitted edit. Read-only search-path skills and paths
 outside the repository keep the strict check. This catches ordinary harness-made commits,
 but it cannot tell who ran a fast-forward or detect a forged reflog entry: it is a
 write-through check, not a security sandbox. The proposal still uses the staging
