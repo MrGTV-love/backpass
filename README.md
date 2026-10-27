@@ -838,7 +838,9 @@ Cross-transcript gap consolidation and synthesis turns never get a backpass wall
 For an explicit analysis cap, acpx receives `--timeout` and backpass retains the legacy
 30-second outer grace so acpx can cancel the turn first. Set `stallTimeoutSeconds` for an
 explicit cap on silence between ACP JSON events on any model turn (both default to `null`,
-disabled). Silent reasoning is not proof of a stall: once a call has been silent for a minute,
+disabled). Each cap must fit a Node timer, which holds at most 2147483647 ms and fires a longer
+delay after 1 ms: `timeoutSeconds` (plus its grace) up to 2147453.647 and `stallTimeoutSeconds`
+up to 2147483.647. A larger value is rejected before work starts; use `null` for no cap. Silent reasoning is not proof of a stall: once a call has been silent for a minute,
 the live view reports `no model activity for <duration>` without stopping work. acpx's own
 configured timeouts can still end a call. Ctrl-C or SIGTERM cancels active ACP process groups
 and closes named sessions before backpass exits, including in the live view. If a session is

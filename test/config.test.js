@@ -202,6 +202,23 @@ test("invalid config values fail loudly with a usable message", () => {
   assert.throws(() => loadConfig(tempRepo('"a bare string"')), UserError);
 });
 
+test("explicit model caps are accepted up to the longest delay a Node timer can hold", () => {
+  for (const [key, max] of [
+    ["timeoutSeconds", 2_147_453.647],
+    ["stallTimeoutSeconds", 2_147_483.647],
+  ]) {
+    assert.equal(loadConfig(tempRepo({ [key]: max }))[key], max);
+    assert.equal(loadConfig(tempRepo({ [key]: 604800 }))[key], 604800);
+    assert.equal(loadConfig(tempRepo({ [key]: null }))[key], null);
+    assert.throws(
+      () => loadConfig(tempRepo({ [key]: max + 0.001 })),
+      (error) => error instanceof UserError && error.message.includes(key) && error.message.includes("null"),
+    );
+    assert.throws(() => loadConfig(tempRepo({ [key]: 31_536_000 })), UserError);
+    assert.throws(() => loadConfig(tempRepo(), { [key]: 0 }), UserError);
+  }
+});
+
 test('--since accepts durations and an explicit "all"', () => {
   assert.equal(parseSince("30d"), 30 * 86_400_000);
   assert.equal(parseSince("12h"), 12 * 3_600_000);
