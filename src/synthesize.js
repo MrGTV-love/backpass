@@ -176,7 +176,7 @@ function resolveLinkTarget(top, link, target, rest) {
 }
 
 /**
- * Every repository path git tracks on the way to a fingerprinted file: each symlink it
+ * Every in-repository path on the way to a fingerprinted file: each symlink it
  * passes through, then the file itself. A direct edit anywhere on the chain is a direct edit.
  */
 function resolutionChain(top, absolute) {
