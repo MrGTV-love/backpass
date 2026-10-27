@@ -821,9 +821,10 @@ role default `medium` for analysis is not sent to omp, while the role default `h
 set it: `--analysis-effort low` or `"analysis": { "effort": "low" }`.
 
 Each candidate is checked with a zero-token acpx probe (claude also uses `claude auth status`,
-because its adapter accepts sessions while logged out). Session creation may wait up to three
-minutes for a cold-starting adapter; the remaining probe operations retain their shorter
-10-20 second limits. A potentially transient busy-harness miss retries once and is not cached;
+because its adapter accepts sessions while logged out). The probe's session creation may wait up
+to three minutes for a cold-starting adapter; the remaining probe operations retain their shorter
+10-20 second limits. A working call's session creation and invocation setup (`config show`,
+`sessions new`, `set`) have no backpass wall-clock cap. A potentially transient busy-harness miss retries once and is not cached;
 durable verdicts are cached in
 `.backpass/agent-probe-cache.json` for 12h (30min for negatives). Pi and OpenCode entries
 are re-probed when their credential or auth-file state changes; `--force` re-probes every
@@ -831,6 +832,31 @@ entry. The probe is a filter, not a promise: if the chosen harness answers `AUTH
 rejects the model, or returns a clean exit with no output at all (a provider account out
 of quota or credits, often swallowed before it reaches stderr) mid-run, backpass falls
 through to the next candidate and says so.
+Model turns have **no default wall-clock or stall cap**. Set `timeoutSeconds` to a positive
+number for an explicit user wall-clock cap only on each per-transcript analysis turn.
+Cross-transcript gap consolidation and synthesis turns never get a backpass wall-clock cap.
+For an explicit analysis cap, acpx receives `--timeout` and backpass retains the legacy
+30-second outer grace so acpx can cancel the turn first. Set `stallTimeoutSeconds` for an
+explicit cap on silence between ACP JSON events on any model turn (both default to `null`,
+disabled). Each cap must fit a Node timer, which holds at most 2147483647 ms and fires a longer
+delay after 1 ms: `timeoutSeconds` (plus its grace) up to 2147453.647 and `stallTimeoutSeconds`
+up to 2147483.647. A larger value is rejected before work starts; use `null` for no cap. Silent reasoning is not proof of a stall: once a call has been silent for a minute,
+the live view reports `no model activity for <duration>` without stopping work. acpx's own
+configured timeouts can still end a call. Ctrl-C or SIGTERM cancels active ACP process groups
+and closes named sessions before backpass exits, including in the live view. If a session is
+already closing, interruption waits for that cleanup rather than aborting it; a second Ctrl-C or
+SIGTERM exits at once and can leave an acpx session owner running.
+
+Each call appends to a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
+event count, longest activity gap and a base-2 millisecond gap histogram. Records accumulate
+across runs; `id` and `startedAt` identify each call. Session setup calls
+(`config show`, `sessions new`, `set`) add their own records, named by `step`, to the artifact of
+the prompt they prepare. Gaps include startup and final silence. Ordinary first-signal
+cleanup finalizes started activity records before exit; the explicit second-signal escape can
+interrupt cleanup. This contains timings, not prompt, thought or tool content. No measured
+idle/loaded silence bound exists yet; these artifacts calibrate any future default stall rule.
+JSON output streams ACP activity immediately, unlike acpx quiet output which buffers the reply.
+
 Model-turn timeouts never fall through, whether enforced by backpass or reported by acpx itself; in analysis, only that transcript fails and is retried next run, including with a pinned agent.
 A clean blank exit that consumed nearly the whole `--timeout` budget is also treated as a timeout, for compatibility with older acpx versions.
 When a whole ladder is exhausted the error lists every candidate with what to run to fix it.
@@ -975,7 +1001,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
   evidence-summary.json  aggregated gradients
   proposal.json          the latest parseable gradient-descent step (absent if none was produced)
   synthesis/             the staging copy the gradient-descent agent edited (memory file + skills)
-  prompts/               the exact prompts of the last run
+  prompts/               the latest prompts; *.activity.jsonl timings append across runs
   agent-probe-cache.json which harnesses were available and logged in, and when
   rejections.json        edits you turned down, and the evidence behind them
   gap-ledger.json        durable gap sightings (see Aggregate gradients)

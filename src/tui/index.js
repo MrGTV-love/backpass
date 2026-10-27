@@ -13,6 +13,7 @@
  */
 
 import { DEFAULT_MAX_EDITS } from "../proposal.js";
+import { cancelModelCalls } from "../model-cancellation.js";
 import { clearProgressSink, setProgressSink } from "../progress.js";
 import { setLoggerSink } from "../logger.js";
 import { colorDepth, detectBackground, tuiEligible } from "./term.js";
@@ -50,6 +51,7 @@ export function initialState(meta) {
   return {
     meta,
     memory: null,
+    modelCalls: {},
     discover: {
       status: "pending",
       startedAt: null,
@@ -116,6 +118,12 @@ export function reduceEvent(state, event, data, now = Date.now()) {
   const { discover: d, analyze: a, fold: f, synthesize: s } = state;
 
   switch (event) {
+    case "model:activity":
+      state.modelCalls[data.id] = data;
+      break;
+    case "model:activity:end":
+      delete state.modelCalls[data.id];
+      break;
     case "memory":
       state.memory = {
         path: data.path,
@@ -293,12 +301,14 @@ class Tui {
     this.timer = null;
     this.onEvent = this.onEvent.bind(this);
     this.onResize = () => this.paint(true);
-    this.onSigint = () => {
+    this.onSigint = async () => {
       this.stop();
+      await cancelModelCalls();
       process.exit(130);
     };
-    this.onSigterm = () => {
+    this.onSigterm = async () => {
       this.stop();
+      await cancelModelCalls();
       process.exit(143);
     };
     this.onExit = () => {

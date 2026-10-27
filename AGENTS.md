@@ -32,8 +32,8 @@ Each owning file's comments and tests hold the detail; read them before touching
   but fingerprinted: a direct write fails `assertRepoUntouched` (`src/synthesize.js`). Keep that protection.
   The model never supplies `find` text; hunks are cut from the raw file (`anchoredHunks`).
 - **Never trust model-reported numbers.** Token deltas, budgets, and session counts are measured in
-  `src/proposal.js`; usage comes from acpx's stderr line or a harness store (`src/acpx.js`), printed only by
-  `src/commands/usage.js`.
+  `src/proposal.js`; usage comes from acpx's JSON-stream `result.usage`, its stderr line, or a harness store
+  (`src/acpx.js`), printed only by `src/commands/usage.js`.
 - **Evidence floors live in `buildProposal`** (`src/proposal.js`): every non-`extract`/`move` edit needs
   `minGapEvidence` distinct sessions from `summary.sources`; deletions need `harm`-class sessions; a pure
   deletion inside a skill file is refused. Extraction and deletion never share one decision. Never add a
@@ -68,7 +68,7 @@ Each owning file's comments and tests hold the detail; read them before touching
   about, never silently ignored or double-written.
 - **Spawns**: a Windows shim refusal (`ERR_WINDOWS_SHIM_UNSAFE_ARG`, `src/subprocess.js`) must be raised by name
   before any generic result handling at every spawn boundary. All model calls go through `src/acpx.js`
-  (acpx is alpha); only session creation gets the cold-start timeout, and a timeout (`result.timedOut`, or acpx's
+  (acpx is alpha); model-turn caps are explicit opt-ins, and a timeout (`result.timedOut`, or acpx's
   own exit 3, `ACPX_EXIT_TIMEOUT`) is handled before generic exits.
 - **Model and effort overrides are invocation-scoped** (`src/harness-invoke.js`): never ACP `set model` or Pi
   `set thought_level`, never edit-then-restore harness defaults.

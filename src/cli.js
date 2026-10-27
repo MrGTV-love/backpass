@@ -341,7 +341,11 @@ export function reportError(err) {
     console.error(
       err.stage === "verify"
         ? "  acpx was too slow to start (adapter-configuration check timed out twice); rerun when the host is less loaded - finished analysis is cached"
-        : "  the harness call timed out; rerun to retry - finished analysis is cached - or raise timeoutSeconds in the backpass config",
+        : err.stage === "stall"
+          ? "  the harness sent no ACP activity within stallTimeoutSeconds; rerun to retry - finished analysis is cached - or raise or unset stallTimeoutSeconds in the backpass config"
+          : err.stage === "acpx"
+            ? "  acpx ended the call at its own timeout; backpass set no cap here, so timeoutSeconds cannot help - rerun to retry - finished analysis is cached - or check acpx's own timeout setting (acpx config show) and adapter startup (acpx --verbose)"
+            : "  the harness call timed out; rerun to retry - finished analysis is cached - or raise timeoutSeconds in the backpass config",
     );
     return 1;
   }

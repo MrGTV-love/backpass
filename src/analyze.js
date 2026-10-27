@@ -321,6 +321,7 @@ async function analyzeOne({
         promptFile,
         cwd: modelCwd || repo.root,
         timeoutSeconds: config.timeoutSeconds,
+        stallTimeoutSeconds: config.stallTimeoutSeconds,
         promptRetries: config.promptRetries,
       };
       // Route effortful calls through a fresh per-transcript session so each harness's

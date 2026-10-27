@@ -398,7 +398,6 @@ async function annotateLoop({
   context,
   common,
   promptDir,
-  timeoutSeconds,
   promptRetries,
   usage,
   notes,
@@ -448,7 +447,7 @@ async function annotateLoop({
     const result = await holder.prompt({
       promptFile,
       approveAll: true,
-      timeoutSeconds,
+      stallTimeoutSeconds: config.stallTimeoutSeconds,
       promptRetries,
     });
     usage.push(usageRecord(holder.ranWith, result));
@@ -664,7 +663,6 @@ export async function synthesizeProposal({
       .map((skill) => skill.path),
   ]);
   const sessionName = `backpass-synth-${process.pid}`;
-  const timeoutSeconds = Math.max(config.timeoutSeconds, 900);
   const usage = [];
   const notes = [];
   const noteOnce = (note) => {
@@ -729,12 +727,13 @@ export async function synthesizeProposal({
       sessionName,
       cwd: workspace.root,
       writeAccess: true,
+      promptFile: editPromptFile,
     });
     try {
       return await holder.session.prompt({
         promptFile: editPromptFile,
         approveAll: true,
-        timeoutSeconds,
+        stallTimeoutSeconds: config.stallTimeoutSeconds,
         promptRetries: config.promptRetries,
       });
     } catch (err) {
@@ -755,6 +754,7 @@ export async function synthesizeProposal({
       sessionName: `${sessionName}-r${(serial += 1)}`,
       cwd: workspace.root,
       writeAccess: true,
+      promptFile: editPromptFile,
     });
 
   try {
@@ -767,7 +767,6 @@ export async function synthesizeProposal({
       context,
       common,
       promptDir,
-      timeoutSeconds,
       promptRetries: config.promptRetries,
       usage,
       notes,

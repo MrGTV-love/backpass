@@ -23,6 +23,12 @@ if (argv.includes("config") && argv.includes("show")) {
   process.exit(0);
 }
 if (process.env.FAKE_CONSOLIDATE_EXIT) process.exit(Number(process.env.FAKE_CONSOLIDATE_EXIT));
+if (argv.includes("--file") && process.env.FAKE_CONSOLIDATE_READY) {
+  fs.writeFileSync(process.env.FAKE_CONSOLIDATE_READY, JSON.stringify(argv));
+  while (!fs.existsSync(process.env.FAKE_CONSOLIDATE_RELEASE)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+}
 process.stdout.write(fs.readFileSync(process.env.FAKE_CONSOLIDATE_REPLY, "utf8"));
 process.stderr.write("[acpx] tokens: input=200 output=10 total=210\\n");
 `,
@@ -142,6 +148,40 @@ test("an unparseable consolidation reply is a named failure, not a guessed merge
 
   assert.match(String(summary.consolidation.failed), /no parseable merge list/);
   assert.equal(Object.keys(h.state.readGapLedger().entries).length, 2);
+});
+
+test("an explicit per-transcript timeoutSeconds never caps cross-transcript consolidation", async (t) => {
+  const idA = gapEntryId(MEMORY_PATH, SIGHTING_A);
+  const idB = gapEntryId(MEMORY_PATH, SIGHTING_B);
+  const h = harness([record("claude-s1", SIGHTING_A), record("codex-s2", SIGHTING_B)], {
+    merges: [[idA, idB]],
+  });
+  h.ctx.config.timeoutSeconds = 300;
+  const ready = path.join(h.root, "turn-ready");
+  const release = path.join(h.root, "release-turn");
+  process.env.FAKE_CONSOLIDATE_READY = ready;
+  process.env.FAKE_CONSOLIDATE_RELEASE = release;
+  t.after(() => {
+    delete process.env.FAKE_CONSOLIDATE_READY;
+    delete process.env.FAKE_CONSOLIDATE_RELEASE;
+    fs.rmSync(h.root, { recursive: true, force: true });
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = foldForRun(h.ctx, memoryFile, "h1", [], h.transcripts);
+  let settled = false;
+  pending.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  while (!settled && !fs.existsSync(ready)) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(fs.existsSync(ready), "the consolidation model turn started");
+  t.mock.timers.tick(1_000_000);
+  fs.writeFileSync(release, "finish the working turn");
+  const summary = await pending;
+  assert.equal(summary.consolidation.merged, 1, "working consolidation survived the per-transcript clock");
+  assert.equal(summary.gaps[0].sessions, 2);
+  assert.equal(Object.keys(h.state.readGapLedger().entries).length, 1);
+  assert.ok(!JSON.parse(fs.readFileSync(ready, "utf8")).includes("--timeout"));
 });
 
 test("fewer than two open gaps never spends a model call", async () => {

@@ -126,7 +126,10 @@ export const DEFAULT_CONFIG = {
     includeCursorIde: false,
   },
   jobs: 4,
-  timeoutSeconds: 300,
+  /** Explicit user wall-clock cap on analysis turns only, never synthesis; null never kills a working model turn. */
+  timeoutSeconds: null,
+  /** No measured idle/loaded silence bound yet; *.activity.jsonl calibrates a future default. */
+  stallTimeoutSeconds: null,
   promptRetries: 1,
   /** Live progress ink set: "auto" queries the terminal background, or force "dark" / "light". */
   theme: "auto",
@@ -333,7 +336,21 @@ export function sinceCutoff(since, now = Date.now()) {
   return window === null ? null : now - window;
 }
 
+/** Node's setTimeout maximum; a longer delay fires after 1 ms. A representability limit, not a latency deadline. */
+const MAX_TIMER_MS = 2_147_483_647;
+/** Seconds the cap's timer adds on top of the configured value (the analysis cap's acpx grace). */
+const CAP_TIMER_GRACE_SECONDS = { timeoutSeconds: 30, stallTimeoutSeconds: 0 };
+
 function validate(config, { kind = "project", repoRoot = null } = {}) {
+  for (const [key, grace] of Object.entries(CAP_TIMER_GRACE_SECONDS)) {
+    const max = MAX_TIMER_MS / 1000 - grace;
+    if (config[key] !== null && (!Number.isFinite(config[key]) || config[key] <= 0 || config[key] > max)) {
+      throw new UserError(
+        `config.${key} must be a positive number of seconds up to ${max}, or null to disable the cap`,
+        `${MAX_TIMER_MS} ms is the longest delay a Node timer can hold`,
+      );
+    }
+  }
   if (!Array.isArray(config.memoryFiles) || config.memoryFiles.length === 0) {
     throw new UserError("config.memoryFiles must be a non-empty array");
   }

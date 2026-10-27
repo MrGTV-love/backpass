@@ -34,6 +34,13 @@ if (argv.includes("sessions")) {
 if (argv.includes("set")) process.exit(0);
 const fileAt = argv.indexOf("--file");
 if (fileAt < 0) process.exit(2);
+if (process.env.FAKE_ACPX_TIMEOUT) {
+  process.stderr.write("[acpx] error: TIMEOUT Timed out after 900000ms\\n");
+  process.exit(3);
+}
+// A held turn keeps working until the test releases it, however much fake time passed.
+const hold = process.env.FAKE_ACPX_HOLD;
+while (hold && !fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
 const prompt = fs.readFileSync(argv[fileAt + 1], "utf8");
 const statePath = process.env.FAKE_ACPX_STATE;
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : { annotate: 0 };
@@ -82,6 +89,7 @@ const { State } = await import("../src/state.js");
 const { UserError, setLoggerSink } = await import("../src/logger.js");
 const { workspacePathFor } = await import("../src/workspace.js");
 const { makeRepo } = await import("./helpers/staging.js");
+const { reportError } = await import("../src/cli.js");
 
 setLoggerSink(() => {});
 
@@ -536,6 +544,52 @@ test("an agent that changes nothing yields an empty proposal, never an invented 
   assert.deepEqual(violations, []);
   assert.equal(proposal.edits.length, 0);
   assert.equal(proposal.budget.delta, 0);
+});
+
+test("an explicit per-transcript timeoutSeconds never caps a synthesis turn that outlives it", async (t) => {
+  const { run, calls } = setup(
+    { edit: {}, annotations: [{ reply: { edits: [] } }] },
+    { overrides: { timeoutSeconds: 300 } },
+  );
+  const release = path.join(fakeDir, `release-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  process.env.FAKE_ACPX_HOLD = release;
+  t.after(() => delete process.env.FAKE_ACPX_HOLD);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = run();
+  let settled = false;
+  pending.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  while (!settled && !calls().some((c) => c.argv.includes("--file"))) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  // Past the explicit 300s analysis cap and the old 900s synthesis floor.
+  t.mock.timers.tick(1_000_000);
+  fs.writeFileSync(release, "");
+  const { proposal, violations } = await pending;
+  assert.deepEqual(violations, []);
+  assert.equal(proposal.edits.length, 0);
+  const turns = calls().filter((c) => c.argv.includes("--file"));
+  assert.equal(turns.length, 2);
+  for (const turn of turns) assert.ok(!turn.argv.includes("--timeout"), turn.argv.join(" "));
+});
+
+test("acpx's own timeout on a synthesis turn never advises timeoutSeconds, which synthesis ignores", async (t) => {
+  const { run } = setup({ edit: {}, annotations: [{ reply: { edits: [] } }] }, { overrides: { timeoutSeconds: 300 } });
+  process.env.FAKE_ACPX_TIMEOUT = "1";
+  t.after(() => delete process.env.FAKE_ACPX_TIMEOUT);
+  const err = await run().then(
+    () => assert.fail("a timed-out synthesis resolved"),
+    (error) => error,
+  );
+  assert.equal(err.timedOut, true);
+  const lines = [];
+  t.mock.method(console, "error", (...args) => lines.push(args.join(" ")));
+  assert.equal(reportError(err), 1);
+  const output = lines.join("\n");
+  assert.match(output, /acpx ended the call at its own timeout/);
+  assert.doesNotMatch(output, /raise timeoutSeconds/);
 });
 
 function oversizedParagraph(count = 5) {
