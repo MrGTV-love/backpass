@@ -450,6 +450,68 @@ test("a fast-forward does not excuse an uncommitted retarget of the CLAUDE.md sy
   assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
 });
 
+for (const scenario of [
+  { name: "an untracked CLAUDE.md symlink" },
+  { name: "an ignored CLAUDE.md symlink", ignore: true },
+  {
+    name: "an untracked CLAUDE.md symlink retargeted during synthesis",
+    swap: { link: "B.md" },
+    refused: true,
+  },
+  {
+    name: "an untracked CLAUDE.md symlink replaced by a regular file",
+    swap: { text: true },
+    refused: true,
+  },
+]) {
+  test(`a fast-forward of AGENTS.md through ${scenario.name} is judged by the link's own target`, () => {
+    const dir = makeCliRepo({
+      memory: MEMORY,
+      files: {
+        "B.md": `${MEMORY}\n- A different file.\n`,
+        ...(scenario.ignore ? { ".gitignore": "CLAUDE.md\n" } : {}),
+      },
+      links: { "CLAUDE.md": "AGENTS.md" },
+    });
+    if (!scenario.ignore) {
+      gitIn(dir, ["rm", "-q", "--cached", "CLAUDE.md"]);
+      gitIn(dir, ["commit", "-qm", "untrack the pointer"]);
+    }
+    assert.equal(
+      gitIn(dir, ["status", "--porcelain", "--ignored", "--", "CLAUDE.md"]),
+      scenario.ignore ? "!! CLAUDE.md" : "?? CLAUDE.md",
+    );
+    const updated = MEMORY.replace("- Never use the em dash.", "- Never use the em dash or en dash.");
+    const { clone, next } = upstreamCommit(dir, { "AGENTS.md": updated });
+    const claude = path.join(dir, "CLAUDE.md");
+    const swap = scenario.swap?.text ? { text: updated } : scenario.swap;
+    const run = runCli(dir, ["propose", ...PIN], {
+      script: {
+        edit: EDIT_TURN,
+        ...(swap ? { swap: { [claude]: swap } } : {}),
+        repoGit: [
+          { cwd: dir, args: ["fetch", "-q", clone, "main"] },
+          { cwd: dir, args: ["merge", "--ff-only", "FETCH_HEAD"] },
+        ],
+        annotations: [{ reply: COALESCED_ANSWER }],
+      },
+    });
+    assert.equal(gitIn(dir, ["rev-parse", "HEAD"]), next, run.output);
+    assert.equal(fs.readFileSync(path.join(dir, "AGENTS.md"), "utf8"), updated);
+    if (scenario.refused) {
+      assert.equal(fs.lstatSync(claude).isSymbolicLink(), Boolean(scenario.swap.link));
+      assert.equal(run.status, 1, run.output);
+      assert.ok(run.output.includes("CLAUDE.md changed in the repository during synthesis"), run.output);
+      assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+    } else {
+      assert.equal(fs.readlinkSync(claude), "AGENTS.md");
+      assert.ok(!run.output.includes("changed in the repository during synthesis"), run.output);
+      assert.equal(run.status, 0, run.output);
+      assert.equal(proposalOf(dir).edits[0].kind, "extract");
+    }
+  });
+}
+
 test("a fast-forward that retargets the CLAUDE.md symlink to an unchanged file preserves the measured proposal", () => {
   const moved = MEMORY.replace("- Never use the em dash.", "- Never use the em dash or en dash.");
   const dir = makeCliRepo({ memory: MEMORY, files: { "docs/AGENTS.md": moved }, links: { "CLAUDE.md": "AGENTS.md" } });

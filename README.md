@@ -539,7 +539,11 @@ pointer; an uncommitted edit to an intermediate target still refuses. A fingerpr
 fast-forward changed (its content, or a committed retarget of a pointer such as
 `CLAUDE.md` -> `AGENTS.md`)
 does not discard the proposal when Git reports it, and every symlink on the way to it,
-clean before and after the run; an uncommitted retarget of the link still refuses. Any
+clean before and after the run; an uncommitted retarget of the link still refuses. Git
+cannot call an untracked or ignored symlink clean, so such a link on the way (a local
+`CLAUDE.md` pointer, a symlinked skills dir) counts as clean only when it is still a symlink
+to the byte-identical target at the final check; retargeting it, replacing it with a regular
+file, or removing it refuses, and an untracked regular file never counts as clean. Any
 other change to a fingerprinted file still refuses the run and names it, including a
 local commit, checkout, reset, or rebase that changes one or a file its pointer reached
 at the time, or an uncommitted edit. Read-only search-path skills and paths

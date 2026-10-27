@@ -34,8 +34,11 @@ const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-fake-cli-"));
  *
  *   {
  *     edit: { "<file>": "<text>" | { replace: [[from, to]] } | null },
+ *     swap: { "<absolute path>": { link: "<target>" } | { text: "<text>" } },
  *     annotations: [ { editFirst?: <edits>, reply?: <json|string>, empty?: true } ]
  *   }
+ *
+ * `swap` replaces the path itself, never writing through a symlink already there.
  *
  * The last annotation step repeats once the script runs out, so "and then it kept
  * answering the same way" needs no padding.
@@ -103,6 +106,11 @@ if (entry.turn === "edit") {
     process.exit(0);
   }
   applyEdits(script.edit);
+  for (const [file, swap] of Object.entries(script.swap || {})) {
+    fs.rmSync(file, { force: true });
+    if (swap.link) fs.symlinkSync(swap.link, file);
+    else fs.writeFileSync(file, swap.text);
+  }
   for (const { cwd: repo, args } of script.repoGit || []) {
     require("node:child_process").execFileSync("git", args, { cwd: repo, stdio: "ignore" });
   }

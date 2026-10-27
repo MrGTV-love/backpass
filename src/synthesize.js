@@ -265,10 +265,24 @@ function treeChainPaths(top, commit, origins) {
   return paths;
 }
 
-/** Git's own clean check, so checkout filters (autocrlf, smudge) do not read as edits. */
-function dirtyPaths(top, paths) {
-  if (!paths.length) return [];
-  return synthesisGit(top, [
+function linkTarget(at) {
+  try {
+    return fs.lstatSync(at).isSymbolicLink() ? fs.readlinkSync(at, { encoding: "buffer" }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Git's own clean check, so checkout filters (autocrlf, smudge) do not read as edits.
+ * Git cannot call an untracked or ignored symlink clean, so each one is returned apart with
+ * its target, to be judged by that target alone; an untracked regular file stays dirty.
+ */
+function checkoutState(top, paths) {
+  const dirty = [];
+  const links = new Map();
+  if (!paths.length) return { dirty, links };
+  const entries = synthesisGit(top, [
     "--no-optional-locks",
     "status",
     "--porcelain=v1",
@@ -280,8 +294,14 @@ function dirtyPaths(top, paths) {
     ...paths,
   ])
     .split("\0")
-    .filter(Boolean)
-    .map((entry) => entry.slice(3));
+    .filter(Boolean);
+  for (const entry of entries) {
+    const relative = entry.slice(3);
+    const target = /^(\?\?|!!) /.test(entry) ? linkTarget(path.join(top, relative)) : null;
+    if (target) links.set(relative, target);
+    else dirty.push(relative);
+  }
+  return { dirty, links };
 }
 
 /** Newest-first raw records preserve operation identity, including both object IDs. */
@@ -332,7 +352,7 @@ function repoGitState(repo, files) {
       startRecord,
       origins,
       chains,
-      dirty: dirtyPaths(root, [...new Set(Object.values(chains).flat())]),
+      ...checkoutState(root, [...new Set(Object.values(chains).flat())]),
     };
   } catch {
     // User-scope memory and directory-only fixtures need not be git checkouts.
@@ -419,6 +439,8 @@ function fastForwardFiles(git, paths) {
  * move touched any chain, its starting chain was clean, and every in-repository path visited
  * on its own chains is clean now, including relative or absolute intermediate link targets
  * the current pointer no longer reaches. Targets outside the git root are not traversed.
+ * An untracked or ignored symlink on a starting chain counts as clean only while it is still
+ * an untracked or ignored symlink to the byte-identical target.
  */
 function explainedByFastForward(repo, git, changed) {
   if (!git || !changed.length) return { files: new Set() };
@@ -438,8 +460,12 @@ function explainedByFastForward(repo, git, changed) {
         paths(file).some((relative) => advanced.files.has(relative)) &&
         !git.chains[file].some((relative) => git.dirty.includes(relative)),
     );
-    const dirty = dirtyPaths(git.root, [...new Set(named.flatMap(paths))]);
-    return { files: new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative)))) };
+    const now = checkoutState(git.root, [...new Set(named.flatMap(paths))]);
+    const unclean = (relative) =>
+      git.links.has(relative)
+        ? !now.links.get(relative)?.equals(git.links.get(relative))
+        : now.dirty.includes(relative) || now.links.has(relative);
+    return { files: new Set(named.filter((file) => !paths(file).some(unclean))) };
   } catch {
     return { files: new Set() };
   }
