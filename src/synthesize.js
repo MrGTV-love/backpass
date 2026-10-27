@@ -227,27 +227,33 @@ function gitChains(top, repo, files) {
  */
 function treeChainPaths(top, commit, origins) {
   const prefixes = (relative) => relative.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
-  const paths = new Set();
-  let pending = [...new Set(origins)];
+  const paths = new Map(Object.keys(origins).map((file) => [file, new Set()]));
+  let pending = Object.entries(origins).map(([file, relative]) => ({ file, relative }));
   for (let hop = 0; hop < MAX_LINK_HOPS && pending.length; hop += 1) {
     const links = new Map();
-    const entries = synthesisGit(top, ["ls-tree", "-z", commit, "--", ...new Set(pending.flatMap(prefixes))]);
+    const entries = synthesisGit(top, [
+      "ls-tree",
+      "-z",
+      commit,
+      "--",
+      ...new Set(pending.flatMap(({ relative }) => prefixes(relative))),
+    ]);
     for (const entry of entries.split("\0")) {
       const match = /^120000 blob ([0-9a-f]+)\t(.*)$/s.exec(entry);
       if (match) links.set(match[2], match[1]);
     }
     const next = [];
-    for (const relative of pending) {
+    for (const { file, relative } of pending) {
       const link = prefixes(relative).find((prefix) => links.has(prefix));
-      paths.add(link ?? relative);
+      paths.get(file).add(link ?? relative);
       if (!link) continue;
       const target = synthesisGit(top, ["cat-file", "blob", links.get(link)]);
       const resolved = path.posix.join(path.posix.dirname(link), target, relative.slice(link.length + 1));
       if (!path.posix.isAbsolute(target) && resolved !== "." && resolved !== ".." && !resolved.startsWith("../")) {
-        next.push(resolved);
+        next.push({ file, relative: resolved });
       }
     }
-    pending = [...new Set(next)];
+    pending = next;
   }
   return paths;
 }
@@ -308,7 +314,7 @@ function repoGitState(repo, files) {
     const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
     const root = fs.realpathSync(top);
     const chains = gitChains(root, repo, files);
-    const origins = Object.values(gitOrigins(root, repo, files));
+    const origins = gitOrigins(root, repo, files);
     const reflog = path.resolve(root, synthesisGit(root, ["rev-parse", "--git-path", "logs/HEAD"]).trim());
     const startRecord = newestHeadReflogRecord(reflog);
     if (!startRecord || startRecord.split(" ", 2)[1] !== head) return null;
@@ -345,11 +351,11 @@ const REFLOG_UNAVAILABLE =
  * or null for other unsafe moves.
  */
 function fastForwardFiles(git, paths) {
-  if (!paths.length) return { files: new Set(), visitedPaths: new Set() };
+  if (!paths.length) return { files: new Set(), visitedPaths: new Map() };
   try {
     const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
     const files = new Set();
-    const visitedPaths = new Set(paths);
+    const visitedPaths = new Map(Object.entries(git.chains).map(([file, chain]) => [file, new Set(chain)]));
     let expected = head;
     let unsafe = false;
     const trees = new Map();
@@ -368,8 +374,16 @@ function fastForwardFiles(git, paths) {
         return unsafe ? null : { files, visitedPaths };
       }
       if (!unsafe && from !== to) {
-        const moved = new Set([...paths, ...chainPaths(from), ...chainPaths(to)]);
-        for (const file of moved) visitedPaths.add(file);
+        const moved = new Set(paths);
+        for (const tree of [chainPaths(from), chainPaths(to)]) {
+          for (const [file, chain] of tree) {
+            if (!visitedPaths.has(file)) visitedPaths.set(file, new Set());
+            for (const relative of chain) {
+              moved.add(relative);
+              visitedPaths.get(file).add(relative);
+            }
+          }
+        }
         const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...moved])
           .split("\0")
           .filter(Boolean);
@@ -405,7 +419,9 @@ function explainedByFastForward(repo, git, changed) {
       ...new Set([...Object.values(git.chains).flat(), ...Object.values(chains).flat()]),
     ]);
     if (!advanced?.files) return { files: new Set(), reason: advanced?.reason };
-    const paths = (file) => [...new Set([...git.chains[file], ...chains[file]])];
+    const paths = (file) => [
+      ...new Set([...git.chains[file], ...chains[file], ...(advanced.visitedPaths.get(file) ?? [])]),
+    ];
     const named = changed.filter(
       (file) =>
         git.chains[file] &&
@@ -413,8 +429,8 @@ function explainedByFastForward(repo, git, changed) {
         paths(file).some((relative) => advanced.files.has(relative)) &&
         !git.chains[file].some((relative) => git.dirty.includes(relative)),
     );
-    const dirty = dirtyPaths(git.root, [...advanced.visitedPaths]);
-    return { files: new Set(dirty.length ? [] : named) };
+    const dirty = dirtyPaths(git.root, [...new Set(named.flatMap(paths))]);
+    return { files: new Set(named.filter((file) => !paths(file).some((relative) => dirty.includes(relative)))) };
   } catch {
     return { files: new Set() };
   }
