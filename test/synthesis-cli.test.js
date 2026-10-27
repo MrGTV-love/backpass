@@ -609,6 +609,46 @@ test("an uncommitted edit to an intermediate CLAUDE.md target between retargetin
   assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
 });
 
+test("an untracked CLAUDE.md link does not hide an uncommitted historical target behind a tracked pointer", () => {
+  const dir = makeCliRepo({
+    memory: MEMORY,
+    files: { "B.md": `${MEMORY}\n- B.\n`, "C.md": `${MEMORY}\n- C.\n` },
+    links: { "CLAUDE.md": "POINTER.md", "POINTER.md": "AGENTS.md" },
+  });
+  gitIn(dir, ["rm", "--cached", "CLAUDE.md"]);
+  gitIn(dir, ["commit", "-qm", "keep local CLAUDE pointer untracked"]);
+  const {
+    clone,
+    commits: [toB, toC],
+  } = upstreamHistory(dir, [{ links: { "POINTER.md": "B.md" } }, { links: { "POINTER.md": "C.md" } }]);
+  const patchDir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-local-link-intermediate-"));
+  const patch = path.join(patchDir, "edit.patch");
+  fs.writeFileSync(path.join(clone, "B.md"), `${MEMORY}\n- B, uncommitted harness edit.\n`);
+  fs.writeFileSync(patch, execFileSync("git", ["diff", "--", "B.md"], { cwd: clone, encoding: "utf8" }));
+  const run = runCli(dir, ["propose", ...PIN], {
+    script: {
+      edit: EDIT_TURN,
+      repoGit: [
+        ["fetch", "-q", clone, "main"],
+        ["merge", "--ff-only", toB],
+        ["apply", patch],
+        ["merge", "--ff-only", toC],
+      ].map((args) => ({ cwd: dir, args })),
+      annotations: [{ reply: COALESCED_ANSWER }],
+    },
+  });
+  fs.rmSync(patchDir, { recursive: true, force: true });
+  assert.equal(gitIn(dir, ["rev-parse", "HEAD"]), toC, run.output);
+  assert.equal(fs.readlinkSync(path.join(dir, "CLAUDE.md")), "POINTER.md");
+  assert.equal(fs.readlinkSync(path.join(dir, "POINTER.md")), "C.md");
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "POINTER.md", "AGENTS.md", "C.md"]), "");
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "CLAUDE.md"]), "?? CLAUDE.md");
+  assert.equal(gitIn(dir, ["status", "--porcelain", "--", "B.md"]), "M B.md");
+  assert.equal(run.status, 1, run.output);
+  assert.ok(run.output.includes("CLAUDE.md changed in the repository during synthesis"), run.output);
+  assert.equal(fs.existsSync(path.join(dir, ".backpass", "proposal.json")), false);
+});
+
 test("an uncommitted edit to an absolute intermediate CLAUDE.md target between fast-forwards still refuses", () => {
   const dir = makeCliRepo({
     memory: MEMORY,

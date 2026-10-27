@@ -532,8 +532,10 @@ with that reason rather than guessing which moves are safe. A reflog record writ
 without a message is still followed, but it never counts as a fast-forward. Symlinks
 are followed as each move's old and new commits record them, using the same target-resolution
 rule as the working tree: relative and absolute targets inside the Git root are followed;
-targets outside it are not traversed. A file an in-repository pointer only reached between
-two moves still counts. Every in-repository path visited on those chains must also be clean
+targets outside it are not traversed. An unchanged untracked or ignored link supplies its
+constant target in each historical tree too, so tracked links behind it and their intermediate
+targets receive the same per-move and final cleanliness checks. A file an in-repository
+pointer only reached between two moves still counts. Every in-repository path visited on those chains must also be clean
 at the final check, including a relative or absolute target no longer reached by the current
 pointer; an uncommitted edit to an intermediate target still refuses. A fingerprinted file such a
 fast-forward changed (its content, or a committed retarget of a pointer such as

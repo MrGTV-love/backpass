@@ -233,8 +233,10 @@ function gitChains(top, repo, files) {
  * In-repository paths for each fingerprint, read from a commit's tree instead of the checkout.
  * Relative and absolute links use the checkout's target-resolution rule; an outside target
  * is not traversed, while an in-repository target is followed as recorded on each side.
+ * A captured untracked/ignored link supplies its constant target when absent from the tree;
+ * its identity is checked separately before any historical-chain exemption is accepted.
  */
-function treeChainPaths(top, commit, origins) {
+function treeChainPaths(top, commit, origins, localLinks) {
   const prefixes = (relative) => relative.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
   const paths = new Map(Object.keys(origins).map((file) => [file, new Set()]));
   let pending = Object.entries(origins).map(([file, relative]) => ({ file, relative }));
@@ -253,10 +255,12 @@ function treeChainPaths(top, commit, origins) {
     }
     const next = [];
     for (const { file, relative } of pending) {
-      const link = prefixes(relative).find((prefix) => links.has(prefix));
+      const link = prefixes(relative).find((prefix) => links.has(prefix) || localLinks.has(prefix));
       paths.get(file).add(link ?? relative);
       if (!link) continue;
-      const target = synthesisGit(top, ["cat-file", "blob", links.get(link)]);
+      const target = links.has(link)
+        ? synthesisGit(top, ["cat-file", "blob", links.get(link)])
+        : localLinks.get(link).toString();
       const resolved = resolveLinkTarget(top, path.join(top, link), target, [relative.slice(link.length + 1)]);
       if (resolved) next.push({ file, relative: path.relative(top, resolved).split(path.sep).join("/") });
     }
@@ -388,7 +392,7 @@ function fastForwardFiles(git, paths) {
     let unsafe = false;
     const trees = new Map();
     const chainPaths = (commit) => {
-      if (!trees.has(commit)) trees.set(commit, treeChainPaths(git.root, commit, git.origins));
+      if (!trees.has(commit)) trees.set(commit, treeChainPaths(git.root, commit, git.origins, git.links));
       return trees.get(commit);
     };
     for (const record of headReflogRecords(git.reflog)) {
