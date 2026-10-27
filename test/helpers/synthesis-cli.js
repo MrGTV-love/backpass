@@ -4,7 +4,9 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { memorySetHash, memoryTextHash } from "../../src/memory.js";
+import { DEFAULT_CONFIG } from "../../src/config.js";
+import { memorySetHash, memorySurfaceHash, memoryTextHash, resolveMemoryFiles } from "../../src/memory.js";
+import { loadProjectSkills } from "../../src/skills.js";
 import { evidenceKey } from "../../src/state.js";
 import { transcriptIdentity } from "../../src/transcript.js";
 
@@ -32,8 +34,11 @@ const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "backpass-fake-cli-"));
  *
  *   {
  *     edit: { "<file>": "<text>" | { replace: [[from, to]] } | null },
+ *     swap: { "<absolute path>": { link: "<target>" } | { text: "<text>" } },
  *     annotations: [ { editFirst?: <edits>, reply?: <json|string>, empty?: true } ]
  *   }
+ *
+ * `swap` replaces the path itself, never writing through a symlink already there.
  *
  * The last annotation step repeats once the script runs out, so "and then it kept
  * answering the same way" needs no padding.
@@ -101,6 +106,14 @@ if (entry.turn === "edit") {
     process.exit(0);
   }
   applyEdits(script.edit);
+  for (const [file, swap] of Object.entries(script.swap || {})) {
+    fs.rmSync(file, { force: true });
+    if (swap.link) fs.symlinkSync(swap.link, file);
+    else fs.writeFileSync(file, swap.text);
+  }
+  for (const { cwd: repo, args } of script.repoGit || []) {
+    require("node:child_process").execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+  }
   process.stdout.write("Edited the staging copy.\\n");
   process.stderr.write("[acpx] tokens: input=1000 output=20 total=1020\\n");
 } else {
@@ -125,7 +138,7 @@ function git(args, cwd) {
  * A repo `backpass propose` will run in: a git checkout with the memory file committed,
  * and tier-1 evidence already recorded, so the run starts at the fold.
  */
-export function makeCliRepo({ memory, sessions = 3, files = {} }) {
+export function makeCliRepo({ memory, sessions = 3, files = {}, links = {} }) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "backpass-cli-")));
   fs.writeFileSync(path.join(dir, "AGENTS.md"), memory);
   for (const [name, text] of Object.entries(files)) {
@@ -133,28 +146,72 @@ export function makeCliRepo({ memory, sessions = 3, files = {} }) {
     fs.mkdirSync(path.dirname(absolute), { recursive: true });
     fs.writeFileSync(absolute, text);
   }
+  for (const [name, target] of Object.entries(links)) fs.symlinkSync(target, path.join(dir, name));
   git(["init", "-q", "-b", "main"], dir);
   git(["config", "user.email", "test@example.com"], dir);
   git(["config", "user.name", "test"], dir);
   git(["add", "-A"], dir);
   git(["commit", "-q", "-m", "memory"], dir);
 
-  const evidenceDir = path.join(dir, ".backpass", "evidence");
+  // Real evidence carries the complete memory-surface hash (`foldForRun` filters on it),
+  // including existing skill descriptions; match the CLI so skill fixtures stay fresh.
+  const memoryHash = memorySurfaceHash(
+    resolveMemoryFiles(dir, DEFAULT_CONFIG.memoryFiles).hash,
+    loadProjectSkills(dir),
+  );
+  writeEvidence({
+    evidenceDir: path.join(dir, ".backpass", "evidence"),
+    home: emptyHome,
+    cwd: dir,
+    memoryPath: "AGENTS.md",
+    memoryHash,
+    sessions,
+  });
+  return dir;
+}
+
+/**
+ * A git-tracked HOME for `propose --scope user`: user memory at `.agents/AGENTS.md`, its
+ * state under `.config/backpass/user/`, and sessions from `project` already analyzed.
+ * Pass `env` to `runCli` so the run sees this HOME and never the real config directory.
+ */
+export function makeCliUserHome({ memory, project, sessions = 3 }) {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "backpass-cli-user-home-")));
+  fs.mkdirSync(path.join(home, ".agents"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".agents", "AGENTS.md"), memory);
+  git(["init", "-q", "-b", "main"], home);
+  git(["config", "user.email", "test@example.com"], home);
+  git(["config", "user.name", "test"], home);
+  git(["add", "-A"], home);
+  git(["commit", "-q", "-m", "dotfiles"], home);
+  writeEvidence({
+    evidenceDir: path.join(home, ".config", "backpass", "user", "evidence"),
+    home,
+    cwd: project,
+    memoryPath: ".agents/AGENTS.md",
+    memoryHash: memorySetHash([{ path: ".agents/AGENTS.md", hash: memoryTextHash(memory) }]),
+    sessions,
+  });
+  return {
+    home,
+    env: { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+  };
+}
+
+/** Claude sessions run in `cwd`, stored under `home`, each with tier-1 evidence already on disk. */
+function writeEvidence({ evidenceDir, home, cwd, memoryPath, memoryHash, sessions }) {
   fs.mkdirSync(evidenceDir, { recursive: true });
-  // Real evidence always carries the set hash it was judged against (`foldForRun` filters
-  // on it); match what the CLI computes for this repo's memory files so fold picks it up.
-  const memoryHash = memorySetHash([{ path: "AGENTS.md", hash: memoryTextHash(memory) }]);
-  const projectDir = path.join(emptyHome, ".claude", "projects", dir.replaceAll(/[/\\.]/g, "-"));
+  const projectDir = path.join(home, ".claude", "projects", cwd.replaceAll(/[/\\.]/g, "-"));
   fs.mkdirSync(projectDir, { recursive: true });
   for (let i = 1; i <= sessions; i += 1) {
-    const sessionId = `s${i}-${path.basename(dir)}`;
+    const sessionId = `s${i}-${path.basename(cwd)}`;
     const sessionPath = path.join(projectDir, `${sessionId}.jsonl`);
     fs.writeFileSync(
       sessionPath,
       `${JSON.stringify({
         type: "user",
         message: { role: "user", content: `session ${i} task` },
-        cwd: dir,
+        cwd,
         sessionId,
         entrypoint: "cli",
         timestamp: "2026-08-01T00:00:00.000Z",
@@ -175,7 +232,7 @@ export function makeCliRepo({ memory, sessions = 3, files = {} }) {
       path.join(evidenceDir, `claude_s${i}.json`),
       JSON.stringify({
         status: "ok",
-        memoryPath: "AGENTS.md",
+        memoryPath,
         memoryHash,
         key: evidenceKey(transcript, memoryHash),
         transcript,
@@ -193,7 +250,6 @@ export function makeCliRepo({ memory, sessions = 3, files = {} }) {
       }),
     );
   }
-  return dir;
 }
 
 /** An isolated HOME, so discovery finds no real transcript store on this machine. */

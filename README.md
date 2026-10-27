@@ -519,6 +519,41 @@ most two). If those also fail, backpass **fails loudly** and preserves the lates
 rejected proposal, if one was produced. It never silently truncates. A harness that writes
 past the staging copy into the repo is an error, never an apply.
 
+Only the fingerprinted memory and skill files are checked; edits, commits, and new files
+elsewhere in the checkout are left alone. A HEAD move during synthesis, fast-forward or
+not, matters only if it changes a fingerprinted path or a symlink on the way to one. Each
+HEAD reflog entry since the run started is read in bounded chunks, without a total-move
+limit, and diffed on those paths alone: a move that changes none of them is accepted,
+and one that does must be a merge or pull fast-forward. The boundary is the exact raw
+reflog record captured at the start, not its mutable index or a repeated commit hash;
+each move must also join the next record's object IDs. If the start record is missing
+or the intervening history is incomplete after expiry or rewriting, the run refuses
+with that reason rather than guessing which moves are safe. A reflog record written
+without a message is still followed, but it never counts as a fast-forward. Symlinks
+are followed as each move's old and new commits record them, using the same target-resolution
+rule as the working tree: relative and absolute targets inside the Git root are followed;
+targets outside it are not traversed. An unchanged untracked or ignored link supplies its
+constant target in each historical tree too, so tracked links behind it and their intermediate
+targets receive the same per-move and final cleanliness checks. A file an in-repository
+pointer only reached between two moves still counts. Every in-repository path visited on those chains must also be clean
+at the final check, including a relative or absolute target no longer reached by the current
+pointer; an uncommitted edit to an intermediate target still refuses. A fingerprinted file such a
+fast-forward changed (its content, or a committed retarget of a pointer such as
+`CLAUDE.md` -> `AGENTS.md`)
+does not discard the proposal when Git reports it, and every symlink on the way to it,
+clean before and after the run; an uncommitted retarget of the link still refuses. Git
+cannot call an untracked or ignored symlink clean, so such a link on the way (a local
+`CLAUDE.md` pointer, a symlinked skills dir) counts as clean only when it is still a symlink
+to the byte-identical target at the final check; retargeting it, replacing it with a regular
+file, or removing it refuses, and an untracked regular file never counts as clean. Any
+other change to a fingerprinted file still refuses the run and names it, including a
+local commit, checkout, reset, or rebase that changes one or a file its pointer reached
+at the time, or an uncommitted edit. Read-only search-path skills and paths
+outside the repository keep the strict check. This catches ordinary harness-made commits,
+but it cannot tell who ran a fast-forward or detect a forged reflog entry: it is a
+write-through check, not a security sandbox. The proposal still uses the staging
+originals, and apply still refuses if its target files have drifted.
+
 Not every annotate turn is an answer, and the three cases are kept apart because they call
 for different things:
 

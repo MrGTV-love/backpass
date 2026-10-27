@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import { extractJson, isBlankOutput, openSession, usageRecord } from "./acpx.js";
 import { expandHomePath, userClaudeSkillsDir } from "./config.js";
@@ -157,8 +158,326 @@ function harnessCountsOf(transcripts) {
   return counts;
 }
 
+function synthesisGit(cwd, args) {
+  return execFileSync("git", ["--literal-pathspecs", ...args], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
+const MAX_LINK_HOPS = 40;
+
+/** Both checkout and historical-tree chains follow relative or absolute links only within the git root. */
+function resolveLinkTarget(top, link, target, rest) {
+  const absolute = path.resolve(path.dirname(link), target, ...rest);
+  const relative = path.relative(top, absolute);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? absolute : null;
+}
+
 /**
- * The repo must be exactly as fingerprinted; the staging copy is the only place to write.
+ * Every in-repository path on the way to a fingerprinted file: each symlink it
+ * passes through, then the file itself. A direct edit anywhere on the chain is a direct edit.
+ */
+function resolutionChain(top, absolute) {
+  const chain = [];
+  let current = absolute;
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop += 1) {
+    const relative = path.relative(top, current);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    const parts = relative.split(path.sep);
+    let link = null;
+    for (let i = 0; i < parts.length && !link; i += 1) {
+      const at = path.join(top, ...parts.slice(0, i + 1));
+      let stat;
+      try {
+        stat = fs.lstatSync(at);
+      } catch {
+        break;
+      }
+      if (stat.isSymbolicLink()) link = { at, rest: parts.slice(i + 1) };
+    }
+    chain.push(relative.split(path.sep).join("/"));
+    if (!link) return chain;
+    if (link.rest.length) chain[chain.length - 1] = path.relative(top, link.at).split(path.sep).join("/");
+    current = resolveLinkTarget(top, link.at, fs.readlinkSync(link.at), link.rest);
+    if (!current) return null;
+  }
+  return null;
+}
+
+/** Fingerprinted keys as paths from the git top, before any symlink is followed. */
+function gitOrigins(top, repo, files) {
+  const root = fs.realpathSync(repo.root);
+  const out = {};
+  for (const file of files) {
+    const relative = path.relative(repo.root, repoFilePath(repo, file));
+    if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    const origin = path.relative(top, path.join(root, relative));
+    if (origin && !origin.startsWith("..") && !path.isAbsolute(origin)) out[file] = origin.split(path.sep).join("/");
+  }
+  return out;
+}
+
+/** Fingerprinted keys as git names them, through any symlinked pointer or skills dir. */
+function gitChains(top, repo, files) {
+  const out = {};
+  for (const [file, origin] of Object.entries(gitOrigins(top, repo, files))) {
+    const chain = resolutionChain(top, path.join(top, origin));
+    if (chain) out[file] = chain;
+  }
+  return out;
+}
+
+/**
+ * In-repository paths for each fingerprint, read from a commit's tree instead of the checkout.
+ * Relative and absolute links use the checkout's target-resolution rule; an outside target
+ * is not traversed, while an in-repository target is followed as recorded on each side.
+ * A captured untracked/ignored link supplies its constant target when absent from the tree;
+ * its identity is checked separately before any historical-chain exemption is accepted.
+ */
+function treeChainPaths(top, commit, origins, localLinks) {
+  const prefixes = (relative) => relative.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+  const paths = new Map(Object.keys(origins).map((file) => [file, new Set()]));
+  let pending = Object.entries(origins).map(([file, relative]) => ({ file, relative }));
+  for (let hop = 0; hop < MAX_LINK_HOPS && pending.length; hop += 1) {
+    const links = new Map();
+    const entries = synthesisGit(top, [
+      "ls-tree",
+      "-z",
+      commit,
+      "--",
+      ...new Set(pending.flatMap(({ relative }) => prefixes(relative))),
+    ]);
+    for (const entry of entries.split("\0")) {
+      const match = /^120000 blob ([0-9a-f]+)\t(.*)$/s.exec(entry);
+      if (match) links.set(match[2], match[1]);
+    }
+    const next = [];
+    for (const { file, relative } of pending) {
+      const link = prefixes(relative).find((prefix) => links.has(prefix) || localLinks.has(prefix));
+      paths.get(file).add(link ?? relative);
+      if (!link) continue;
+      const target = links.has(link)
+        ? synthesisGit(top, ["cat-file", "blob", links.get(link)])
+        : localLinks.get(link).toString();
+      const resolved = resolveLinkTarget(top, path.join(top, link), target, [relative.slice(link.length + 1)]);
+      if (resolved) next.push({ file, relative: path.relative(top, resolved).split(path.sep).join("/") });
+    }
+    pending = next;
+  }
+  return paths;
+}
+
+function linkTarget(at) {
+  try {
+    return fs.lstatSync(at).isSymbolicLink() ? fs.readlinkSync(at, { encoding: "buffer" }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Git's own clean check, so checkout filters (autocrlf, smudge) do not read as edits.
+ * Git cannot call an untracked or ignored symlink clean, so each one is returned apart with
+ * its target, to be judged by that target alone; an untracked regular file stays dirty.
+ */
+function checkoutState(top, paths) {
+  const dirty = [];
+  const links = new Map();
+  if (!paths.length) return { dirty, links };
+  const entries = synthesisGit(top, [
+    "--no-optional-locks",
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--ignored",
+    "--no-renames",
+    "--",
+    ...paths,
+  ])
+    .split("\0")
+    .filter(Boolean);
+  for (const entry of entries) {
+    const relative = entry.slice(3);
+    const target = /^(\?\?|!!) /.test(entry) ? linkTarget(path.join(top, relative)) : null;
+    if (target) links.set(relative, target);
+    else dirty.push(relative);
+  }
+  return { dirty, links };
+}
+
+/** Newest-first raw records preserve operation identity, including both object IDs. */
+function* headReflogRecords(file) {
+  const fd = fs.openSync(file, "r");
+  try {
+    let position = fs.fstatSync(fd).size;
+    let pending = Buffer.alloc(0);
+    while (position > 0) {
+      const size = Math.min(position, 64 * 1024);
+      position -= size;
+      const chunk = Buffer.allocUnsafe(size);
+      if (fs.readSync(fd, chunk, 0, size, position) !== size) throw new Error("HEAD reflog changed while reading");
+      const data = Buffer.concat([chunk, pending]);
+      let end = data.length;
+      for (let i = data.length - 1; i >= 0; i -= 1) {
+        if (data[i] !== 10) continue;
+        if (i + 1 < end) yield data.subarray(i + 1, end).toString("utf8");
+        end = i;
+      }
+      pending = Buffer.from(data.subarray(0, end));
+    }
+    if (pending.length) yield pending.toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function newestHeadReflogRecord(file) {
+  for (const record of headReflogRecords(file)) return record;
+  return null;
+}
+
+/** Only the fingerprinted files are inspected; the rest of the checkout is not backpass's to judge. */
+function repoGitState(repo, files) {
+  try {
+    const [top, head] = synthesisGit(repo.root, ["rev-parse", "--show-toplevel", "HEAD"]).trim().split("\n");
+    const root = fs.realpathSync(top);
+    const chains = gitChains(root, repo, files);
+    const origins = gitOrigins(root, repo, files);
+    const reflog = path.resolve(root, synthesisGit(root, ["rev-parse", "--git-path", "logs/HEAD"]).trim());
+    const startRecord = newestHeadReflogRecord(reflog);
+    if (!startRecord || startRecord.split(" ", 2)[1] !== head) return null;
+    return {
+      root,
+      head,
+      reflog,
+      startRecord,
+      origins,
+      chains,
+      ...checkoutState(root, [...new Set(Object.values(chains).flat())]),
+    };
+  } catch {
+    // User-scope memory and directory-only fixtures need not be git checkouts.
+    return null;
+  }
+}
+
+const REFLOG_UNAVAILABLE =
+  "the synthesis-start HEAD entry cannot be found in the reflog; expired or rewritten history cannot establish which moves changed the fingerprinted files";
+
+/**
+ * Every HEAD move since the exact raw record captured at the start, not its mutable
+ * index or a repeated commit hash. Both object IDs must join the next record, so partial
+ * expiry cannot hide a local commit behind a later fast-forward. Judged only on the fingerprinted
+ * paths it changes, following relative and absolute in-repository symlink targets in both
+ * commits as well as at the start and now; outside targets are not traversed. A move that
+ * changes none is left alone; one that does must be an ordinary
+ * merge/pull fast-forward (a record with no message never is), or the exemption is lost,
+ * since a harness's own commit, checkout, reset, or rebase looks the same as anyone else's.
+ * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
+ * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
+ * Returns the fingerprinted paths fast-forwards changed and each fingerprinted file's visited
+ * chain paths for the final cleanliness check, a reason when the synthesis-start boundary is unavailable,
+ * or null for other unsafe moves.
+ */
+function fastForwardFiles(git, paths) {
+  if (!paths.length) return { files: new Set(), visitedPaths: new Map() };
+  try {
+    const head = synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim();
+    const files = new Set();
+    const visitedPaths = new Map(Object.entries(git.chains).map(([file, chain]) => [file, new Set(chain)]));
+    let expected = head;
+    let unsafe = false;
+    const trees = new Map();
+    const chainPaths = (commit) => {
+      if (!trees.has(commit)) trees.set(commit, treeChainPaths(git.root, commit, git.origins, git.links));
+      return trees.get(commit);
+    };
+    for (const record of headReflogRecords(git.reflog)) {
+      const match = /^([0-9a-f]+) ([0-9a-f]+) [^\t]*(?:\t(.*))?$/.exec(record);
+      if (!match) return { reason: REFLOG_UNAVAILABLE };
+      const [, from, to, subject = ""] = match;
+      if (to !== expected) return { reason: REFLOG_UNAVAILABLE };
+      if (record === git.startRecord) {
+        if (to !== git.head) return { reason: REFLOG_UNAVAILABLE };
+        if (synthesisGit(git.root, ["rev-parse", "--verify", "HEAD"]).trim() !== head) return null;
+        return unsafe ? null : { files, visitedPaths };
+      }
+      if (!unsafe && from !== to) {
+        const moved = new Set(paths);
+        for (const tree of [chainPaths(from), chainPaths(to)]) {
+          for (const [file, chain] of tree) {
+            if (!visitedPaths.has(file)) visitedPaths.set(file, new Set());
+            for (const relative of chain) {
+              moved.add(relative);
+              visitedPaths.get(file).add(relative);
+            }
+          }
+        }
+        const touched = synthesisGit(git.root, ["diff", "--name-only", "--no-renames", "-z", from, to, "--", ...moved])
+          .split("\0")
+          .filter(Boolean);
+        if (touched.length) {
+          if (!/^(merge|pull)( .*)?: Fast-forward$/.test(subject)) unsafe = true;
+          else {
+            synthesisGit(git.root, ["merge-base", "--is-ancestor", from, to]);
+            for (const file of touched) files.add(file);
+          }
+        }
+      }
+      expected = from;
+    }
+    return { reason: REFLOG_UNAVAILABLE };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { reason: REFLOG_UNAVAILABLE };
+    // Missing/pruned reflogs and non-forward history cannot establish an exemption.
+  }
+  return null;
+}
+
+/**
+ * The changed fingerprinted files a clean fast-forward fully explains: a fast-forward changed
+ * a path on its resolution chain (the file or a link retargeted upstream), no other kind of
+ * move touched any chain, its starting chain was clean, and every in-repository path visited
+ * on its own chains is clean now, including relative or absolute intermediate link targets
+ * the current pointer no longer reaches. Targets outside the git root are not traversed.
+ * An untracked or ignored symlink on a starting chain counts as clean only while it is still
+ * an untracked or ignored symlink to the byte-identical target.
+ */
+function explainedByFastForward(repo, git, changed) {
+  if (!git || !changed.length) return { files: new Set() };
+  try {
+    const chains = gitChains(git.root, repo, changed);
+    const advanced = fastForwardFiles(git, [
+      ...new Set([...Object.values(git.chains).flat(), ...Object.values(chains).flat()]),
+    ]);
+    if (!advanced?.files) return { files: new Set(), reason: advanced?.reason };
+    const paths = (file) => [
+      ...new Set([...git.chains[file], ...chains[file], ...(advanced.visitedPaths.get(file) ?? [])]),
+    ];
+    const named = changed.filter(
+      (file) =>
+        git.chains[file] &&
+        chains[file] &&
+        paths(file).some((relative) => advanced.files.has(relative)) &&
+        !git.chains[file].some((relative) => git.dirty.includes(relative)),
+    );
+    const now = checkoutState(git.root, [...new Set(named.flatMap(paths))]);
+    const unclean = (relative) =>
+      git.links.has(relative)
+        ? !now.links.get(relative)?.equals(git.links.get(relative))
+        : now.dirty.includes(relative) || now.links.has(relative);
+    return { files: new Set(named.filter((file) => !paths(file).some(unclean))) };
+  } catch {
+    return { files: new Set() };
+  }
+}
+
+/**
+ * The repo must be exactly as fingerprinted, except clean committed fast-forwards;
+ * the staging copy is still the only place for the synthesis harness to write.
  *
  * Skills staging withheld are left out: such a file is one backpass has guaranteed it will
  * never write, so aborting a run over a third party's edit to it would discard measured
@@ -176,9 +495,9 @@ function harnessCountsOf(transcripts) {
  * may ever write this," so a change there must still fail the run.
  */
 function assertRepoUntouched(repo, before, workspace) {
-  const after = repoFingerprint(repo, Object.keys(before));
-  const moved = Object.keys(before).filter((file) => before[file] !== after[file]);
-  if (!moved.length) return;
+  const after = repoFingerprint(repo, Object.keys(before.files));
+  const changed = Object.keys(before.files).filter((file) => before.files[file] !== after[file]);
+  if (!changed.length) return;
   const insideRepo = (file) => {
     try {
       resolveMemoryPath(repo.root, file);
@@ -187,6 +506,17 @@ function assertRepoUntouched(repo, before, workspace) {
       return false;
     }
   };
+  const searchPathSkill = (file) =>
+    workspace.unstageable.some(
+      (entry) => entry.reason === READ_ONLY_SEARCH_PATH && (file === entry.path || file.startsWith(`${entry.path}/`)),
+    );
+  const explained = explainedByFastForward(
+    repo,
+    before.git,
+    changed.filter((file) => insideRepo(file) && !searchPathSkill(file)),
+  );
+  const moved = changed.filter((file) => !explained.files.has(file));
+  if (!moved.length) return;
   // The fingerprint only proves a file changed, not who changed it: in a shared workspace
   // another session or a cron job can edit it mid-run. The harness is named only when the
   // repository file now equals the staging copy, which a bystander has no reason to produce.
@@ -204,6 +534,7 @@ function assertRepoUntouched(repo, before, workspace) {
   const outside = moved.filter((file) => !inside.includes(file));
   const wroteThrough = inside.filter(matchesStaging);
   const claims = [];
+  if (explained.reason) claims.push(explained.reason);
   if (inside.length) {
     claims.push(`${inside.join(", ")} changed in the repository during synthesis`);
   }
@@ -651,7 +982,7 @@ export async function synthesizeProposal({
   // it has to be detected, not silently excused the way an ordinary withheld skill is
   // (design note above `assertRepoUntouched`). It stays in the fingerprint so a change
   // there still fails the run loudly.
-  const fingerprint = repoFingerprint(repo, [
+  const fingerprintFiles = [
     ...new Set(
       [memoryFile.path, ...config.memoryFiles, ...(config.nestedMemoryFiles || []), routing?.rootPath].filter(Boolean),
     ),
@@ -661,7 +992,8 @@ export async function synthesizeProposal({
         return !reason || reason === READ_ONLY_SEARCH_PATH;
       })
       .map((skill) => skill.path),
-  ]);
+  ];
+  const fingerprint = { files: repoFingerprint(repo, fingerprintFiles), git: repoGitState(repo, fingerprintFiles) };
   const sessionName = `backpass-synth-${process.pid}`;
   const usage = [];
   const notes = [];
@@ -717,7 +1049,7 @@ export async function synthesizeProposal({
     // repository; rebasing over that write would hide it, so it is reported before the rebuild.
     if (attempted) assertRepoUntouched(repo, fingerprint, workspace);
     workspace = prepareWorkspace(workspaceOptions);
-    rebaseFingerprint(fingerprint, workspace);
+    rebaseFingerprint(fingerprint.files, workspace);
     attempted = true;
     progress("edit", { attempt: 1 });
     holder.session = await openSession({
