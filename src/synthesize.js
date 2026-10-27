@@ -346,8 +346,8 @@ const REFLOG_UNAVAILABLE =
  * since a harness's own commit, checkout, reset, or rebase looks the same as anyone else's.
  * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
  * reflog). This is accidental write-through detection, not a sandbox against hostile tools.
- * Returns the fingerprinted paths fast-forwards changed and all visited chain paths for
- * the final cleanliness check, a reason when the synthesis-start boundary is unavailable,
+ * Returns the fingerprinted paths fast-forwards changed and each fingerprinted file's visited
+ * chain paths for the final cleanliness check, a reason when the synthesis-start boundary is unavailable,
  * or null for other unsafe moves.
  */
 function fastForwardFiles(git, paths) {
@@ -408,8 +408,8 @@ function fastForwardFiles(git, paths) {
 /**
  * The changed fingerprinted files a clean fast-forward fully explains: a fast-forward changed
  * a path on its resolution chain (the file or a link retargeted upstream), no other kind of
- * move touched any chain, its starting chain was clean, and every path visited on any
- * chain is clean now, including intermediate targets the current pointer no longer reaches.
+ * move touched any chain, its starting chain was clean, and every path visited on its own
+ * chains is clean now, including intermediate targets the current pointer no longer reaches.
  */
 function explainedByFastForward(repo, git, changed) {
   if (!git || !changed.length) return { files: new Set() };
