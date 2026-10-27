@@ -168,6 +168,13 @@ function synthesisGit(cwd, args) {
 
 const MAX_LINK_HOPS = 40;
 
+/** Both checkout and historical-tree chains follow relative or absolute links only within the git root. */
+function resolveLinkTarget(top, link, target, rest) {
+  const absolute = path.resolve(path.dirname(link), target, ...rest);
+  const relative = path.relative(top, absolute);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? absolute : null;
+}
+
 /**
  * Every repository path git tracks on the way to a fingerprinted file: each symlink it
  * passes through, then the file itself. A direct edit anywhere on the chain is a direct edit.
@@ -193,7 +200,8 @@ function resolutionChain(top, absolute) {
     chain.push(relative.split(path.sep).join("/"));
     if (!link) return chain;
     if (link.rest.length) chain[chain.length - 1] = path.relative(top, link.at).split(path.sep).join("/");
-    current = path.resolve(path.dirname(link.at), fs.readlinkSync(link.at), ...link.rest);
+    current = resolveLinkTarget(top, link.at, fs.readlinkSync(link.at), link.rest);
+    if (!current) return null;
   }
   return null;
 }
@@ -222,8 +230,9 @@ function gitChains(top, repo, files) {
 }
 
 /**
- * Every path `resolutionChain` would pass through for `origins`, read from a commit's tree
- * instead of the checkout, so a link a move retargeted is followed as it was on each side.
+ * In-repository paths for each fingerprint, read from a commit's tree instead of the checkout.
+ * Relative and absolute links use the checkout's target-resolution rule; an outside target
+ * is not traversed, while an in-repository target is followed as recorded on each side.
  */
 function treeChainPaths(top, commit, origins) {
   const prefixes = (relative) => relative.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
@@ -248,10 +257,8 @@ function treeChainPaths(top, commit, origins) {
       paths.get(file).add(link ?? relative);
       if (!link) continue;
       const target = synthesisGit(top, ["cat-file", "blob", links.get(link)]);
-      const resolved = path.posix.join(path.posix.dirname(link), target, relative.slice(link.length + 1));
-      if (!path.posix.isAbsolute(target) && resolved !== "." && resolved !== ".." && !resolved.startsWith("../")) {
-        next.push({ file, relative: resolved });
-      }
+      const resolved = resolveLinkTarget(top, path.join(top, link), target, [relative.slice(link.length + 1)]);
+      if (resolved) next.push({ file, relative: path.relative(top, resolved).split(path.sep).join("/") });
     }
     pending = next;
   }
@@ -340,8 +347,9 @@ const REFLOG_UNAVAILABLE =
  * Every HEAD move since the exact raw record captured at the start, not its mutable
  * index or a repeated commit hash. Both object IDs must join the next record, so partial
  * expiry cannot hide a local commit behind a later fast-forward. Judged only on the fingerprinted
- * paths it changes, with each symlink chain resolved in both of its commits as well as at the
- * start and now. A move that changes none is left alone; one that does must be an ordinary
+ * paths it changes, following relative and absolute in-repository symlink targets in both
+ * commits as well as at the start and now; outside targets are not traversed. A move that
+ * changes none is left alone; one that does must be an ordinary
  * merge/pull fast-forward (a record with no message never is), or the exemption is lost,
  * since a harness's own commit, checkout, reset, or rebase looks the same as anyone else's.
  * Reflogs describe operations, not actors: a harness can itself fast-forward (or forge a
@@ -408,8 +416,9 @@ function fastForwardFiles(git, paths) {
 /**
  * The changed fingerprinted files a clean fast-forward fully explains: a fast-forward changed
  * a path on its resolution chain (the file or a link retargeted upstream), no other kind of
- * move touched any chain, its starting chain was clean, and every path visited on its own
- * chains is clean now, including intermediate targets the current pointer no longer reaches.
+ * move touched any chain, its starting chain was clean, and every in-repository path visited
+ * on its own chains is clean now, including relative or absolute intermediate link targets
+ * the current pointer no longer reaches. Targets outside the git root are not traversed.
  */
 function explainedByFastForward(repo, git, changed) {
   if (!git || !changed.length) return { files: new Set() };
