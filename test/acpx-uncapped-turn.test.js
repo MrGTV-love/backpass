@@ -47,6 +47,10 @@ if (mode === "tool-error") {
   process.exit(1);
 }
 hold("prompt");
+if (mode === "grace-timeout") {
+  process.stderr.write("[acpx] error: TIMEOUT user budget ended\\n");
+  process.exit(3);
+}
 const update = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } };
 process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update } }) + "\\n");
 process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { usage: { inputTokens: 3, outputTokens: 4 } } }) + "\\n");
@@ -164,6 +168,29 @@ function withMode(t, mode) {
   process.env.FAKE_MODE = mode;
   t.after(() => delete process.env.FAKE_MODE);
   return reset(t);
+}
+
+for (const session of [false, true]) {
+  test(`an explicit ${session ? "session" : "exec"} cap lets acpx finish its own timeout before the outer kill`, async (t) => {
+    const promptFile = withMode(t, "grace-timeout");
+    const pending = (session ? sessionPrompt : execOneShot)({
+      agent: "codex",
+      sessionName: "backpass-timeout-grace",
+      promptFile,
+      cwd: fixtureDir,
+      timeoutSeconds: 2,
+    });
+    await until(pending, (argv) => argv.includes("--file"));
+    t.mock.timers.tick(2_000);
+    release("prompt");
+    const err = await pending.then(
+      () => assert.fail("acpx's own timeout resolved as a successful call"),
+      (error) => error,
+    );
+    assert.equal(err.code, 3, "the outer kill preempted acpx's graceful timeout response");
+    assert.equal(err.timedOut, true);
+    assert.match(err.message, /ended at its own timeout \(exit 3\).*user budget ended/);
+  });
 }
 
 test("a tool request's error reply is not the call's diagnostic; acpx's terminal error is", async (t) => {

@@ -94,10 +94,10 @@ export class AcpxError extends Error {
  * candidate would fail on the very same argument.
  *
  * @param {string[]} args
- * @param {{ cleanup?: boolean, timeoutMs?: number, signal?: AbortSignal, captureStdout?: boolean, onStdout?: (chunk: Buffer) => void, cwd?: string, input?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ cleanup?: boolean, deferCancellationWait?: boolean, timeoutMs?: number, signal?: AbortSignal, captureStdout?: boolean, onStdout?: (chunk: Buffer) => void, cwd?: string, input?: string, env?: NodeJS.ProcessEnv }} [options]
  */
 async function run(args, options = {}) {
-  const { cleanup = false, ...captureOptions } = options;
+  const { cleanup = false, deferCancellationWait = false, ...captureOptions } = options;
   if (isCancellingModelCalls() && !cleanup) {
     await cancelModelCalls();
     throw new AcpxError("backpass interrupted");
@@ -127,9 +127,10 @@ async function run(args, options = {}) {
     unregister();
     finish();
   }
-  // A cancelled prompt must not unwind the CLI before the independent queue owner
-  // has closed. Resolve this capture's cleanup first, so waiting here cannot cycle.
-  if (isCancellingModelCalls() && !cleanup) await cancelModelCalls();
+  // Unobserved calls wait here; observed calls finalize their telemetry first and
+  // wait in runWithActivity instead. Neither may unwind into failed evidence while
+  // the independent queue owner is still closing.
+  if (isCancellingModelCalls() && !cleanup && !deferCancellationWait) await cancelModelCalls();
   return result;
 }
 
@@ -409,21 +410,36 @@ function invocationAgentArgs(invocation, agent) {
   return invocation.acpxAgentCommand ? ["--agent", invocation.acpxAgentCommand] : [acpxAgentName(agent)];
 }
 
-/** Working-session setup is recorded and shown like a model turn, but never capped. */
-function runSetup(args, options, { agent, promptFile, step }) {
-  return captureModelActivity((activity) => run(args, { ...options, ...activity }), { promptFile, agent, step });
+/** Finalize measured activity before the signal handler can exit, but not before capture stops. */
+async function runWithActivity(args, options, activityOptions) {
+  // Do not write a start record for new work that cancellation will never run.
+  if (isCancellingModelCalls()) {
+    await cancelModelCalls();
+    throw new AcpxError("backpass interrupted");
+  }
+  try {
+    return await captureModelActivity(
+      (activity) => run(args, { ...options, ...activity, deferCancellationWait: true }),
+      activityOptions,
+    );
+  } finally {
+    // The observer has flushed its decoder and end record. Keep the caller behind
+    // the shutdown barrier so cancellation cannot flood analysis with false failures.
+    if (isCancellingModelCalls()) await cancelModelCalls();
+  }
 }
 
 async function verifyHarnessInvocation(invocation, cwd, { timeoutMs = undefined, promptFile = null } = {}) {
   if (!invocation.requiredBuiltinAgent) return;
   const args = [...(cwd ? ["--cwd", cwd] : []), "config", "show", "--format", "json"];
   const activity = { agent: invocation.requiredBuiltinAgent, promptFile, step: "config show" };
-  let result = await runSetup(args, { timeoutMs, cwd, env: invocation.env }, activity);
+  let result = await runWithActivity(args, { timeoutMs, cwd, env: invocation.env }, activity);
   // A timed-out `config show` says nothing about the adapter map: on a loaded host node can
   // take longer than the budget just to start. Retry once with a wider budget; if it still
   // times out, fail this call (the analysis stage records it and a later run retries it)
   // rather than raise a UserError, which stops the whole run with advice that cannot help.
-  if (result.timedOut) result = await runSetup(args, { timeoutMs: timeoutMs * 3, cwd, env: invocation.env }, activity);
+  if (result.timedOut)
+    result = await runWithActivity(args, { timeoutMs: timeoutMs * 3, cwd, env: invocation.env }, activity);
   if (result.timedOut) {
     throw new AcpxError(
       `acpx config show timed out verifying the ${invocation.requiredBuiltinAgent} adapter configuration`,
@@ -604,15 +620,16 @@ export async function execOneShot({
       );
     }
     const execStartedAt = Date.now();
-    const result = await captureModelActivity(
-      (activity) =>
-        run(args, {
-          ...activity,
-          captureStdout: false,
-          timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
-          cwd,
-          env: invocation.env,
-        }),
+    const result = await runWithActivity(
+      args,
+      {
+        captureStdout: false,
+        // Retain the legacy grace for acpx's own cancellation. Paired review at
+        // host load 40-88 found seven head-only failures without these 30 seconds.
+        timeoutMs: timeoutSeconds > 0 ? (timeoutSeconds + 30) * 1000 : undefined,
+        cwd,
+        env: invocation.env,
+      },
       { promptFile, stallTimeoutSeconds, agent },
     );
     if (result.stalled)
@@ -738,7 +755,7 @@ export async function openSession({
   /** @type {Awaited<ReturnType<typeof run>>} */
   let created;
   try {
-    created = await runSetup(
+    created = await runWithActivity(
       [
         ...(invocation.acpxModel ? ["--model", invocation.acpxModel] : []),
         ...acpxAgentArgs,
@@ -782,7 +799,7 @@ export async function openSession({
 
   try {
     if (invocation.sessionMode) {
-      const setMode = await runSetup(
+      const setMode = await runWithActivity(
         [...acpxAgentArgs, "-s", sessionName, "set-mode", invocation.sessionMode],
         runOpts,
         setup("set-mode"),
@@ -804,7 +821,7 @@ export async function openSession({
       }
     }
     if (effort && invocation.setEffortKey) {
-      const set = await runSetup(
+      const set = await runWithActivity(
         [...acpxAgentArgs, "-s", sessionName, "set", invocation.setEffortKey, effort],
         runOpts,
         setup(`set ${invocation.setEffortKey}`),
@@ -852,15 +869,16 @@ export async function openSession({
       "--file",
       promptFile,
     ];
-    const result = await captureModelActivity(
-      (activity) =>
-        run(args, {
-          ...activity,
-          captureStdout: false,
-          timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
-          cwd,
-          env: invocation.env,
-        }),
+    const result = await runWithActivity(
+      args,
+      {
+        captureStdout: false,
+        // Retain the legacy grace for acpx's own cancellation. Paired review at
+        // host load 40-88 found seven head-only failures without these 30 seconds.
+        timeoutMs: timeoutSeconds > 0 ? (timeoutSeconds + 30) * 1000 : undefined,
+        cwd,
+        env: invocation.env,
+      },
       { promptFile, stallTimeoutSeconds, agent },
     );
     if (result.stalled)

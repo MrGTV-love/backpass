@@ -834,7 +834,9 @@ of quota or credits, often swallowed before it reaches stderr) mid-run, backpass
 through to the next candidate and says so.
 Model turns have **no default wall-clock or stall cap**. Set `timeoutSeconds` to a positive
 number for an explicit user wall-clock cap only on each per-transcript analysis turn.
-Cross-transcript gap consolidation and synthesis turns never get a backpass wall-clock cap. Set `stallTimeoutSeconds` for an
+Cross-transcript gap consolidation and synthesis turns never get a backpass wall-clock cap.
+For an explicit analysis cap, acpx receives `--timeout` and backpass retains the legacy
+30-second outer grace so acpx can cancel the turn first. Set `stallTimeoutSeconds` for an
 explicit cap on silence between ACP JSON events on any model turn (both default to `null`,
 disabled). Silent reasoning is not proof of a stall: once a call has been silent for a minute,
 the live view reports `no model activity for <duration>` without stopping work. acpx's own
@@ -843,10 +845,13 @@ and closes named sessions before backpass exits, including in the live view. If 
 already closing, interruption waits for that cleanup rather than aborting it; a second Ctrl-C or
 SIGTERM exits at once and can leave an acpx session owner running.
 
-Each prompt writes a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
-event count, longest activity gap and a base-2 millisecond gap histogram. Session setup calls
+Each call appends to a sibling `<prompt>.activity.jsonl` artifact with call start/end timestamps,
+event count, longest activity gap and a base-2 millisecond gap histogram. Records accumulate
+across runs; `id` and `startedAt` identify each call. Session setup calls
 (`config show`, `sessions new`, `set`) add their own records, named by `step`, to the artifact of
-the prompt they prepare. Gaps include startup and final silence. This contains timings, not prompt, thought or tool content. No measured
+the prompt they prepare. Gaps include startup and final silence. Ordinary first-signal
+cleanup finalizes started activity records before exit; the explicit second-signal escape can
+interrupt cleanup. This contains timings, not prompt, thought or tool content. No measured
 idle/loaded silence bound exists yet; these artifacts calibrate any future default stall rule.
 JSON output streams ACP activity immediately, unlike acpx quiet output which buffers the reply.
 
@@ -994,7 +999,7 @@ exclude (`.git/info/exclude`, written by `backpass init`) rather than the tracke
   evidence-summary.json  aggregated gradients
   proposal.json          the latest parseable gradient-descent step (absent if none was produced)
   synthesis/             the staging copy the gradient-descent agent edited (memory file + skills)
-  prompts/               the exact prompts of the last run, with their *.activity.jsonl timings
+  prompts/               the latest prompts; *.activity.jsonl timings append across runs
   agent-probe-cache.json which harnesses were available and logged in, and when
   rejections.json        edits you turned down, and the evidence behind them
   gap-ledger.json        durable gap sightings (see Aggregate gradients)

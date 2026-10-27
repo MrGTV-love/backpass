@@ -138,6 +138,31 @@ await (${session} ? sessionPrompt : execOneShot)({agent:'codex',sessionName:'can
           assert.equal(alive, false, `${kind} ${pid} outlived interrupted backpass`);
         }
         if (session) assert.equal(fs.readFileSync(closeFile, "utf8"), "closed");
+        if (!closing) {
+          const records = fs
+            .readFileSync(`${promptFile}.activity.jsonl`, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          const starts = records.filter((record) => record.type === "start");
+          const ends = records.filter((record) => record.type === "end");
+          assert.equal(ends.length, starts.length, "interruption left an activity call unfinished");
+          for (const start of starts) {
+            assert.equal(ends.filter((end) => end.id === start.id).length, 1, "activity must finalize exactly once");
+          }
+          const promptStart = starts.filter((record) => record.step === null);
+          assert.equal(promptStart.length, 1);
+          const end = ends.find((record) => record.id === promptStart[0].id);
+          assert.equal(end.eventCount, 1, "the actual ACP event was not recorded before exit");
+          assert.equal(
+            end.gapHistogram.reduce((sum, count) => sum + count, 0),
+            2,
+            "startup and final gaps are both recorded",
+          );
+          assert.ok(end.longestGapMs > 0);
+          assert.equal(end.stalled, false, "user interruption is not an inferred stall");
+          assert.ok(end.endedAt >= end.lastActivityAt);
+        }
       } finally {
         parent.kill("SIGKILL");
         if (!pids && fs.existsSync(pidsFile)) pids = JSON.parse(fs.readFileSync(pidsFile, "utf8"));

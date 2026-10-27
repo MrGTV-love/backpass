@@ -39,7 +39,9 @@ const hang = () => setInterval(() => {}, 1000);
 if (args.includes('sessions') && args.includes('new')) {
   const owner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   owner.unref();
-  fs.writeFileSync(files.owner, String(owner.pid));
+  // Existence is the readiness signal: never expose a transient empty PID file.
+  fs.writeFileSync(files.owner + '.tmp', String(owner.pid));
+  fs.renameSync(files.owner + '.tmp', files.owner);
   if (mode === 'probe-create') hang();
   else process.exit(0);
 } else if (args.includes('sessions') && args.includes('close')) {
