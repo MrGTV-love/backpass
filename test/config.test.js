@@ -203,10 +203,10 @@ test("invalid config values fail loudly with a usable message", () => {
 });
 
 test("explicit model caps are accepted up to the longest delay a Node timer can hold", () => {
-  for (const [key, max] of [
+  for (const [key, max] of /** @type {Array<[string, number]>} */ ([
     ["timeoutSeconds", 2_147_453.647],
     ["stallTimeoutSeconds", 2_147_483.647],
-  ]) {
+  ])) {
     assert.equal(loadConfig(tempRepo({ [key]: max }))[key], max);
     assert.equal(loadConfig(tempRepo({ [key]: 604800 }))[key], 604800);
     assert.equal(loadConfig(tempRepo({ [key]: null }))[key], null);
